@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.build/
+build/
+dist/
+dist-v*/
+.pytest_cache/
+releases/
+profiles.json
+*.sqlite
+*.sqlite3
+app/

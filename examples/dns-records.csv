@@ -1,0 +1,3 @@
+zone,name,type,content,ttl,proxied,priority
+example.com,@,A,192.0.2.10,1,true,10
+example.net,www,CNAME,target.example.net,1,false,10

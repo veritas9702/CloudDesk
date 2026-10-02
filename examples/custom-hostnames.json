@@ -1,0 +1,3 @@
+[
+  {"hostname":"customer.example.com","ssl":{"method":"txt","type":"dv"}}
+]

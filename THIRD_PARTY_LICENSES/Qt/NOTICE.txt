@@ -1,0 +1,3 @@
+Qt / PySide6 / Shiboken6 6.11.2. Copyright The Qt Company Ltd and contributors.
+Dynamically linked, unmodified libraries. Source: https://code.qt.io/cgit/pyside/pyside-setup.git/ and https://code.qt.io/cgit/qt/qtbase.git/
+Use under LGPL v3 terms. Users may replace the dynamic libraries with compatible versions.
