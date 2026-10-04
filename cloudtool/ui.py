@@ -25,8 +25,7 @@ from .operations import OperationsController
 from .table_model import TableModel
 from .rule_templates import example_rules
 from .cloudflare import Cloudflare, PHASES, SETTINGS, domains
-from .providers import PROVIDERS
-from .ui_components import combo, line, editor, label, button, card, AlignedForm, DomainEditor
+from .ui_components import combo, line, editor, label, button, card, AlignedForm, DomainEditor, table, number_input
 from .qt_jobs import Worker
 from .token_view_ui import TokenViewDialog
 from .browser_token_ui import BrowserTokenDialog, show_browser_token
@@ -119,21 +118,6 @@ class GuideDialog(QDialog):
         layout.addLayout(row)
 
 
-def table(model):
-    w = QTableView()
-    w.setModel(model)
-    w.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    w.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-    w.setAlternatingRowColors(True)
-    w.setSortingEnabled(False)
-    w.setWordWrap(False)
-    w.verticalHeader().hide()
-    w.verticalHeader().setDefaultSectionSize(34)
-    w.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    w.horizontalHeader().setStretchLastSection(True)
-    return w
-
-
 class TokenDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
@@ -180,8 +164,9 @@ class TokenDialog(QDialog):
 
 
 class Window(QMainWindow):
-    def __init__(self, root=None):
+    def __init__(self, root=None, embedded=False):
         super().__init__()
+        self.embedded = embedded
         self.setWindowTitle("CloudDesk · 云平台工具箱")
         self.resize(1390, 940)
         self.setMinimumSize(1120, 780)
@@ -213,17 +198,18 @@ class Window(QMainWindow):
         side.setFixedWidth(220)
         sl = QVBoxLayout(side)
         sl.setContentsMargins(18, 26, 18, 20)
-        sl.addWidget(label("CloudDesk", "brand"))
-        sl.addWidget(label("云平台工具箱  /  DESKTOP", "sideCaption"))
-        sl.addSpacing(20)
-        self.platform = combo([p["title"] for p in PROVIDERS.values()])
+        if not self.embedded:
+            sl.addWidget(label("CloudDesk", "brand"))
+            sl.addWidget(label("云平台工具箱  /  DESKTOP", "sideCaption"))
+            sl.addSpacing(20)
+        self.platform = combo(["Cloudflare"])
         sl.addWidget(self.platform)
         self.nav = QListWidget()
         self.nav.setObjectName("navigation")
-        self.nav.addItems(["域名总览 / 导出", "添加域名 / Zone", "DNS 添加 / 更新", "解析替换 / Replace", "删除解析 / 清空", "删除域名 / Zone", "解析代理状态", "SSL / TLS 证书", "SSL 自定义主机名", "清除缓存 / 配置", "传输优化", "页面 / WAF 规则", "其他设置"])
+        self.nav.addItems(["域名总览 / 导出", "添加域名 / Zone", "DNS 添加 / 更新", "解析替换 / Replace", "删除解析 / 清空", "删除域名 / Zone", "解析代理状态", "SSL / TLS 证书", "SSL 自定义主机名", "清除缓存 / 配置", "传输优化", "页面 / WAF 规则", "其他设置", "高级自动化"])
         self.nav.currentRowChanged.connect(self.navigate)
         sl.addWidget(self.nav, 1)
-        sl.addWidget(label("TOKEN 隔离  ·  本地运行\nv0.10.4  /  Cloudflare API v4", "sideCaption"))
+        sl.addWidget(label("TOKEN 隔离  ·  本地运行\nv0.16.24  /  Cloudflare API v4", "sideCaption"))
         outer.addWidget(side)
         main = QWidget()
         main.setObjectName("workspace")
@@ -247,6 +233,7 @@ class Window(QMainWindow):
         bar.addWidget(self.tokens, 1)
         bar.addWidget(button("添加 Token", self.add_profile))
         bar.addWidget(button("查看 Token", self.view_profile))
+        bar.addWidget(button("解锁 / 重连", self.reconnect_profile))
         bar.addWidget(button("移除配置", self.remove_profile))
         self.refresh_btn = button("读取域名", self.refresh_zones, True)
         bar.addWidget(self.refresh_btn)
@@ -259,6 +246,12 @@ class Window(QMainWindow):
         self.build_zones()
         self.build_workspace()
         self.build_history()
+        from .automation_ui import AutomationPanel
+        self.automation = AutomationPanel(self)
+        self.tabs.addTab(self.automation, "高级自动化")
+        from .cf_onboarding_ui import CFOnboardingPanel
+        self.onboarding = CFOnboardingPanel(self)
+        self.tabs.addTab(self.onboarding, "域名接入")
         foot = QHBoxLayout()
         self.status = label("第一次使用：查看 Token 指南 → 添加 Token → 读取域名")
         self.status.setMaximumHeight(42)
@@ -306,7 +299,7 @@ class Window(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 6, 0, 0)
         self.inputs = QWidget()
-        il = QVBoxLayout(self.inputs)
+        il = QHBoxLayout(self.inputs)
         il.setContentsMargins(0, 0, 0, 0)
         il.setSpacing(10)
         scope_card, scope_layout = card()
@@ -314,12 +307,15 @@ class Window(QMainWindow):
         scope_heading.addWidget(label("01  操作范围", "sectionTitle"))
         scope_heading.addStretch()
         scope_note = label("填写域名优先；留空使用列表选择")
-        scope_note.setWordWrap(False)
-        scope_heading.addWidget(scope_note)
+        scope_note.setWordWrap(True)
         scope_layout.addLayout(scope_heading)
+        scope_layout.addWidget(scope_note)
         self.scope = DomainEditor(5)
         self.scope.setPlaceholderText("操作域名，每行一个；留空则使用“域名与选择”中选中的域名。添加 Zone 时必须填写。")
         scope_layout.addWidget(self.scope)
+        scope_card.setMaximumWidth(285)
+        scope_card.setMinimumWidth(225)
+        scope_layout.addStretch()
         il.addWidget(scope_card)
         self.scope.textChanged.connect(self.invalidate)
         split = QSplitter(Qt.Orientation.Vertical)
@@ -335,7 +331,8 @@ class Window(QMainWindow):
         self.operation_hint = label("")
         parameter_layout.addWidget(self.operation_hint)
         self.permission_hint = label("", "permission")
-        parameter_layout.addWidget(self.permission_hint)
+        self.permission_hint.hide()
+        self.operation_hint.setToolTip('权限要求可点击右上角“所需权限”查看')
         self.forms = QStackedWidget()
         self.forms.setMinimumHeight(105)
         self.forms.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
@@ -344,28 +341,21 @@ class Window(QMainWindow):
         params = QHBoxLayout(self.execution_controls)
         params.setContentsMargins(0, 8, 0, 0)
         params.setSpacing(10)
-        self.workers = QSpinBox()
-        self.workers.setRange(1, 12)
-        self.workers.setValue(4)
-        self.workers.setFixedWidth(68)
-        self.workers.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.rate = QDoubleSpinBox()
-        self.rate.setRange(0.2, 3.0)
+        self.workers = number_input(1, 12, 4, ' 个', width=66)
+        self.rate = number_input(0.2, 3.0, 2.0, ' 次/秒', decimals=1, width=96)
         self.rate.setSingleStep(0.2)
-        self.rate.setValue(2.0)
-        self.rate.setFixedWidth(72)
-        self.rate.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        params.addWidget(QLabel("并发域名"))
+        params.addWidget(QLabel("并发"))
         params.addWidget(self.workers)
-        params.addWidget(QLabel("请求 / 秒"))
+        params.addSpacing(12)
+        params.addWidget(QLabel("频率"))
         params.addWidget(self.rate)
-        self.batch_dns = QCheckBox("DNS 原生批处理")
+        self.batch_dns = QCheckBox("DNS 批处理")
         self.batch_dns.setChecked(True)
         self.batch_dns.setToolTip("每个域名最多 100 条记录合并为一个请求；可关闭以使用逐条请求")
         self.batch_dns.toggled.connect(self.invalidate)
         params.addWidget(self.batch_dns)
         params.addStretch()
-        self.preview_btn = button("① 生成操作预览", self.preview, True)
+        self.preview_btn = button("① 预览", self.preview, True)
         params.addWidget(self.preview_btn)
         parameter_layout.addWidget(self.execution_controls)
         il.addWidget(parameters, 1)
@@ -405,6 +395,11 @@ class Window(QMainWindow):
         layout.addWidget(split)
         self.tabs.addTab(page, "批量操作")
         self.create_forms()
+        for scroll in self.form_scrollers:
+            form = scroll.widget().findChild(QFormLayout)
+            for row in range(form.rowCount()):
+                item = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+                if item and item.widget(): item.widget().setFixedWidth(90)
         self.set_task_expanded(False)
         for widget in self.forms.findChildren(QLineEdit):
             widget.textChanged.connect(self.invalidate)
@@ -423,11 +418,14 @@ class Window(QMainWindow):
         self.plan_table.setVisible(expanded)
         self.progress.setVisible(expanded)
         self.plan_empty.setVisible(expanded and not self.plan_model.rows)
-        self.toggle_task_btn.setText("收起" if expanded else "展开")
+        self.toggle_task_btn.setText("编辑参数" if expanded else "查看结果")
+        self.forms.setVisible(not expanded)
+        self.operation_hint.setVisible(not expanded)
+        self.inputs_scroll.setMaximumHeight(240 if expanded else 16777215)
         self.task_card.setMinimumHeight(175 if expanded else 68)
         self.task_card.setMaximumHeight(16777215 if expanded else 68)
         if expanded:
-            self.workspace_split.setSizes([max(360, self.workspace_split.height()-215), 215])
+            self.workspace_split.setSizes([240, max(215, self.workspace_split.height()-240)])
 
     def form(self, title, hint):
         page = QWidget()
@@ -435,6 +433,7 @@ class Window(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 4, 10, 10)
         fields = AlignedForm()
+        fields.setVerticalSpacing(6)
         layout.addLayout(fields)
         layout.addStretch()
         scroll = QScrollArea()
@@ -487,15 +486,17 @@ class Window(QMainWindow):
         extra.addWidget(self.dns_priority)
         extra.addWidget(QLabel("MX 优先级"))
         extra.addStretch()
-        f.addRow("生存时间 / MX", extra)
+        dns_extra = QWidget(); dns_extra.setLayout(extra)
+        f.addRow("生存时间 / MX", dns_extra)
+        f.setRowVisible(dns_extra, False)
         f.addRow("代理", self.dns_proxy)
-        self.dns_import_toggle = QCheckBox("使用 CSV / JSON 批量记录（高级）")
+        self.dns_import_toggle = QCheckBox("更多参数 / CSV、JSON 导入")
         f.addRow("批量导入", self.dns_import_toggle)
         self.dns_import = editor("", 90)
         self.dns_import.setPlaceholderText('可选 JSON 数组 / CSV，填写后优先使用导入内容。CSV 表头：zone,name,type,content,ttl,proxied,priority\nexample.com,www,A,192.0.2.1,1,true,10')
         f.addRow("批量记录", self.dns_import)
         f.setRowVisible(self.dns_import, False)
-        self.dns_import_toggle.toggled.connect(lambda enabled, form=f: form.setRowVisible(self.dns_import, enabled))
+        self.dns_import_toggle.toggled.connect(lambda enabled, form=f: (form.setRowVisible(self.dns_import, enabled), form.setRowVisible(dns_extra, enabled)))
         dns_buttons = QHBoxLayout()
         dns_buttons.addWidget(button("导入 CSV / JSON 文件", self.import_records))
         dns_buttons.addWidget(button("读取 / 导出 DNS 记录", lambda: self.inspect("DNS")))
@@ -517,7 +518,7 @@ class Window(QMainWindow):
         self.proxy_value = combo(["开启代理", "关闭代理"])
         f.addRow("目标状态", self.proxy_value)
         self.settings_ui = {}
-        self.make_settings("SSL/TLS", "SSL / TLS 边缘证书", "按设置项读取并修改，支持 Strict、最低 TLS、HTTPS 跳转等。")
+        self.make_settings("SSL/TLS", "SSL / TLS 加密模式", "选择自动、完整（严格）、完整、灵活或关闭；其他 HTTPS 设置可切换设置项。")
 
         f, layout = self.form("SSL 自定义主机名", "Cloudflare for SaaS 功能。需要相应权限、套餐及主机名验证；不是普通 DNS 记录。")
         self.hostname_mode = combo(["添加", "修改", "删除"])
@@ -532,6 +533,8 @@ class Window(QMainWindow):
         f.insertRow(0, "操作", self.cache_mode)
         self.purge_json = editor('{"purge_everything": true}', 65)
         f.addRow("清缓存 JSON", self.purge_json)
+        f.setRowVisible(self.purge_json, False)
+        self.cache_mode.currentIndexChanged.connect(lambda index, form=f: form.setRowVisible(self.purge_json, index == 1))
         self.make_settings("传输优化", "传输优化", "支持 HTTP/2、HTTP/3、0-RTT、Early Hints 等。已弃用的 Auto Minify / Brotli 开关不再发送请求。")
 
         f, layout = self.form("页面规则 / WAF / Rulesets", "复制采用追加模式并保留原表达式中的域名；不会自动改写字符串。跨账户引用 ID、套餐限制须自行核对。删除仅作用于当前 Zone 阶段入口规则。")
@@ -551,6 +554,12 @@ class Window(QMainWindow):
         f.addRow("删除规则 ID", self.rules_ids)
         self.rules_json = editor('[\n  {"action": "managed_challenge", "expression": "(ip.src eq 192.0.2.1)", "description": "Example", "enabled": true}\n]', 110)
         f.addRow("规则 JSON 数组", self.rules_json)
+        def rule_fields(index, form=f):
+            form.setRowVisible(self.rules_source, index == 1)
+            form.setRowVisible(self.rules_ids, index == 2)
+            form.setRowVisible(self.rules_json, index == 0)
+        self.rules_mode.currentIndexChanged.connect(rule_fields)
+        rule_fields(0)
         btns = QHBoxLayout()
         btns.addWidget(button("载入当前类型模板", self.rule_template))
         btns.addWidget(button("读取当前规则", self.inspect_rules))
@@ -575,14 +584,24 @@ class Window(QMainWindow):
 
         def values():
             value.clear()
-            value.addItems([json.dumps(v, ensure_ascii=False) for v in SETTINGS[key][setting.currentText()]])
+            if key == 'SSL/TLS' and setting.currentText() == 'ssl':
+                value.setEditable(False)
+                for title, mode in [('请选择加密模式', None), ('自动 SSL/TLS', 'auto'), ('完整（严格）', 'strict'), ('完整', 'full'), ('灵活', 'flexible'), ('关闭（不安全）', 'off')]:
+                    value.addItem(title, mode)
+            else:
+                value.setEditable(True)
+                value.addItems([json.dumps(v, ensure_ascii=False) for v in SETTINGS[key][setting.currentText()]])
         setting.currentTextChanged.connect(values)
         values()
         advanced = editor("", 70)
         advanced.setPlaceholderText('可选，填写后优先使用 JSON 对象，例如 {"ssl":"strict","always_use_https":"on"}')
         f.addRow("设置项", setting)
-        f.addRow("JSON 值", value)
+        f.addRow("目标值", value)
+        advanced_toggle = QCheckBox('高级：批量设置 JSON')
+        f.addRow(advanced_toggle)
         f.addRow("批量设置 JSON", advanced)
+        f.setRowVisible(advanced, False)
+        advanced_toggle.toggled.connect(lambda enabled: f.setRowVisible(advanced, enabled))
         f.addRow(button("读取当前设置值", lambda: self.inspect("设置", {"setting": setting.currentText()})))
         self.settings_ui[key] = (setting, value, advanced)
         return f, layout
@@ -605,7 +624,12 @@ class Window(QMainWindow):
         if not hasattr(self, "forms") or index < 0:
             return
         # Navigation is view-only. Input changes, not page switches, invalidate plans.
-        if index == 0:
+        if index == 1:
+            self.tabs.setCurrentWidget(self.onboarding)
+            self.onboarding.activate()
+        elif index == 13:
+            self.tabs.setCurrentWidget(self.automation)
+        elif index == 0:
             self.tabs.setCurrentIndex(0)
         else:
             self.forms.setCurrentIndex(index - 1)
@@ -656,6 +680,8 @@ class Window(QMainWindow):
         if self.store:
             self.store.close()
         self.client = self.store = self.provider = None
+        self.automation.reset()
+        self.onboarding.reset()
         self.plan = None
         self.events.clear()
         self.scope.clear()
@@ -694,17 +720,50 @@ class Window(QMainWindow):
         if not key:
             return
         try:
-            profile = next(p for p in self.vault.profiles if p["id"] == key)
+            self.connect_selected_profile()
+            if self.provider and self.tabs.currentWidget() is self.onboarding:
+                QTimer.singleShot(0, self.onboarding.activate)
+        except Exception:
+            self.error(self.identity.text())
+
+    def connect_selected_profile(self):
+        """Load a saved credential atomically without clearing in-progress form input."""
+        key = self.tokens.currentData()
+        profile = next((p for p in self.vault.profiles if p['id'] == key), None)
+        if profile is None:
+            raise ValueError('请先添加并选择 API Token')
+        self.identity.setText(f"Token 已保存：{profile['label']} · 尚未解锁，点击“解锁 / 重连”或读取操作重试")
+        client = store = None
+        try:
             token = self.unlock_profile(profile)
             if token is None:
+                return False
+            store = Store(self.root / 'tokens', key)
+            client = Client(token)
+            provider = Cloudflare(client, store)
+            zones = store.cached('zones', [])
+        except Exception:
+            if client is not None: client.close()
+            if store is not None: store.close()
+            self.identity.setText(f"Token 已保存：{profile['label']} · 加载失败，请点击“解锁 / 重连”，检查主密码或当前 Windows 用户")
+            raise ValueError(self.identity.text()) from None
+        self.client, self.store, self.provider = client, store, provider
+        self.zones_data = zones
+        self.filter_zones()
+        self.history()
+        self.identity.setText(f"已解锁：{profile['label']} · 隔离标识 {key[:10]} · 可读取 Cloudflare（权限尚待接口验证）")
+        return True
+
+    def reconnect_profile(self):
+        if self.busy:
+            return
+        try:
+            if not self.provider and not self.connect_selected_profile():
+                self.status.setText('已取消解锁，Token 配置仍保留；需要使用时可以重新解锁。')
                 return
-            self.store = Store(self.root / "tokens", key)
-            self.client = Client(token)
-            self.provider = Cloudflare(self.client, self.store)
-            self.zones_data = self.store.cached("zones", [])
-            self.filter_zones()
-            self.history()
-            self.identity.setText(f"独立配置：{profile['label']}  ·  隔离标识 {key[:10]}  ·  本地缓存，请读取域名刷新")
+            self.status.setText('Token 已加载，可以读取域名和账户。')
+            if self.tabs.currentWidget() is self.onboarding:
+                self.onboarding.activate()
         except Exception as exc:
             self.error(str(exc))
 
@@ -757,13 +816,18 @@ class Window(QMainWindow):
 
     def require(self):
         if not self.provider:
-            raise ValueError("请先添加并选择 API Token")
+            if not self.tokens.currentData():
+                raise ValueError("请先添加并选择 API Token")
+            if not self.connect_selected_profile():
+                raise ValueError("Token 已保存但尚未解锁；请点击“解锁 / 重连”输入主密码，无需重复添加。")
 
     def start_job(self, fn, done, message):
         if self.busy:
             return
         self.require()
         self.busy = True
+        self.automation.set_busy(True)
+        self.onboarding.set_busy(True)
         self.client.cancel.clear()
         self.client.limiter.rate = self.rate.value()
         self.zone_filter_timer.stop()
@@ -775,8 +839,20 @@ class Window(QMainWindow):
         self.execute_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.status.setText(message)
+        self.job_started = time.monotonic()
+        self.job_activity = message
+        self.job_result_received = False
         self.job = Worker(fn, self.client.safe)
-        self.job.result.connect(done)
+        self.client.progress = self.job.report
+        def deliver(result):
+            self.job_result_received = True
+            try:
+                done(result)
+                if self.status.text() == message or self.status.text().startswith('已运行 '):
+                    self.status.setText('读取 / 处理完成')
+            except Exception as exc:
+                self.job_error(self.client.safe(exc))
+        self.job.result.connect(deliver)
         self.job.failure.connect(self.job_error)
         self.job.finished.connect(self.job_finished)
         self.job.start()
@@ -784,6 +860,9 @@ class Window(QMainWindow):
     def job_finished(self):
         self.flush_events()
         self.busy = False
+        if self.client: self.client.progress = None
+        self.automation.set_busy(False)
+        self.onboarding.set_busy(False)
         for w in [self.account_bar, self.execution_controls, self.zone_table, self.search, self.zone_state]:
             w.setEnabled(True)
         self.scope.setReadOnly(False)
@@ -798,6 +877,7 @@ class Window(QMainWindow):
             old.deleteLater()
 
     def job_error(self, message):
+        self.job_result_received = True
         if "403" in message or "10000" in message:
             message += "\n\n请核对 Token 的功能编辑权限、区域资源范围、IP 限制和有效期。可打开右上角“Token 创建与权限指南”。"
         self.status.setText(message)
@@ -823,9 +903,13 @@ class Window(QMainWindow):
 
     def zones_ready(self, zones):
         self.zones_data = zones
+        self.search.clear()
+        self.zone_state.setCurrentIndex(0)
         self.filter_zones()
         self.identity.setText(f"独立配置：{self.tokens.currentText()}  ·  隔离标识 {self.client.key[:10]}  ·  已读取 {len(zones)} 个域名")
-        self.status.setText("域名读取完成")
+        self.nav.setCurrentRow(0)
+        self.tabs.setCurrentIndex(0)
+        self.status.setText(f"域名读取完成：{len(zones)} 个，已显示在域名列表。" if zones else "域名读取完成：0 个。请核对 Token 的 Zone Read 权限及域名资源范围。")
 
     def filter_zones(self, *_):
         query = self.search.text().strip().lower()
@@ -878,7 +962,12 @@ class Window(QMainWindow):
                 return "purge", {"body": json.loads(self.purge_json.toPlainText())}
             key = {7: "SSL/TLS", 9: "缓存", 10: "传输优化", 12: "其他设置"}[i]
             setting, value, advanced = self.settings_ui[key]
-            values = json.loads(advanced.toPlainText()) if advanced.toPlainText().strip() else {setting.currentText(): json.loads(value.currentText())}
+            if key == 'SSL/TLS' and setting.currentText() == 'ssl' and not advanced.toPlainText().strip():
+                mode = value.currentData()
+                if mode is None: raise ValueError('请选择 SSL/TLS 加密模式')
+                values = {'ssl_automatic_mode': 'auto'} if mode == 'auto' else {'ssl_automatic_mode': 'custom', 'ssl': mode}
+            else:
+                values = json.loads(advanced.toPlainText()) if advanced.toPlainText().strip() else {setting.currentText(): json.loads(value.currentText())}
             return "settings", {"values": values}
         if i == 8:
             return ["hostname_add", "hostname_edit", "hostname_delete"][self.hostname_mode.currentIndex()], {"payloads": json.loads(self.hostname_json.toPlainText())}
@@ -898,7 +987,11 @@ class Window(QMainWindow):
             workers = self.workers.value()
             self.plan = None
             self.plan_consumed = False
-            self.plan_model.reset([])
+            targets = (scope[0] or [z['name'] for z in scope[1]]) if scope else options.get('names', [])
+            self.plan_model.reset([{'id': 'preview:' + name, 'target': name, 'summary': '核对远端', 'state': '排队', 'detail': ''} for name in targets])
+            self.row_by_id = {r['id']: i for i, r in enumerate(self.plan_model.rows)}
+            self.plan_label.setText(f'03  正在检查 {len(targets)} 个域名')
+            self.set_task_expanded(True)
             self.start_job(self.operations().preview_job(scope, op, options, workers), self.plan_ready, "正在读取远端并生成预览；此阶段不写入 Cloudflare…")
         except Exception as exc:
             self.error(str(exc))
@@ -908,13 +1001,15 @@ class Window(QMainWindow):
         self.plan_consumed = False
         self.completed_ids.clear()
         self.plan_model.reset([{"id": a.id, "target": a.target, "method": a.method, "summary": a.summary, "state": "待确认", "detail": a.path} for a in plan.actions])
-        self.row_by_id = {a.id: i for i, a in enumerate(plan.actions)}
-        self.plan_label.setText(f"03  执行计划 · {len(plan.actions)} 个请求 / {len(set(a.target for a in plan.actions))} 个域名")
+        notes = [dict(n, id='note:' + n['target'], summary='预览结果') for n in plan.notes if n['state'] == '无需修改']
+        if notes: self.plan_model.reset(self.plan_model.rows + notes)
+        self.row_by_id = {r['id']: i for i, r in enumerate(self.plan_model.rows)}
+        self.plan_label.setText(f"03  执行计划 · {len(plan.actions)} 个请求 / {len(plan.notes) or len(set(a.target for a in plan.actions))} 个域名")
         self.plan_empty.setVisible(not plan.actions)
-        self.set_task_expanded(bool(plan.actions))
+        self.set_task_expanded(bool(self.plan_model.rows))
         self.progress.setRange(0, max(1, len(plan.actions)))
         self.progress.setValue(0)
-        self.status.setText("预览完成，请检查明细后执行" if plan.actions else "没有需要更改的项目")
+        self.status.setText("预览完成，请检查明细后执行" if plan.actions else "预览完成：没有写入请求，请查看每个域名的原因；没有 DNS 记录时应使用“DNS 添加 / 更新”。")
 
     def execute_plan(self):
         if not self.plan or self.plan_consumed or self.busy:
@@ -943,9 +1038,16 @@ class Window(QMainWindow):
     def flush_events(self):
         if self.job:
             self.events.update(self.job.take_events())
+        if self.busy and not getattr(self, 'job_result_received', False):
+            elapsed = int(time.monotonic() - self.job_started)
+            self.status.setText(f'已运行 {elapsed} 秒 · {self.job_activity}')
         if not self.events:
             return
         pending, self.events = self.events, {}
+        activity = pending.pop('@transport', None)
+        if activity and not getattr(self, 'job_result_received', False):
+            self.job_activity = activity[1]
+        self.automation.consume_events(pending)
         changed = []
         for aid, (state, detail) in pending.items():
             idx = getattr(self, "row_by_id", {}).get(aid)
@@ -961,13 +1063,19 @@ class Window(QMainWindow):
             last = last if last >= 0 else min(len(self.plan_model.rows) - 1, first + 50)
             self.plan_model.dataChanged.emit(self.plan_model.index(first, 3), self.plan_model.index(last, 4))
         self.progress.setValue(len(self.completed_ids))
+        if changed and self.busy and not getattr(self, 'job_result_received', False):
+            counts = {}
+            for row in self.plan_model.rows: counts[row['state']] = counts.get(row['state'], 0) + 1
+            self.plan_label.setText('03  任务状态 · ' + ' / '.join(f'{k} {v}' for k, v in counts.items()))
 
     def executed(self, _):
         self.flush_events()
         counts = {}
         for row in self.plan_model.rows:
             counts[row["state"]] = counts.get(row["state"], 0) + 1
-        self.status.setText("执行结束 · " + " / ".join(f"{k} {v}" for k, v in counts.items()) + "；再次操作请重新生成预览")
+        summary = " / ".join(f"{k} {v}" for k, v in counts.items())
+        self.plan_label.setText("03  执行结束 · " + summary)
+        self.status.setText("执行结束 · " + summary + "；再次操作请重新生成预览")
 
     def inspect(self, kind, options=None):
         try:
@@ -1094,13 +1202,15 @@ def main():
             from .extension_setup import prepare_extension
             helper = prepare_extension(Path(temp))
             assert (helper / 'catalog.js').is_file()
-            window = Window(Path(temp))
-            profile = window.vault.add("Self-check", "FAKE_DIAGNOSTIC_TOKEN", "diagnostic-password-123")
-            assert window.vault.token(profile, "diagnostic-password-123") == "FAKE_DIAGNOSTIC_TOKEN"
+            from .shell import PlatformWindow
+            window = PlatformWindow(Path(temp))
+            cloudflare = window.workspaces['cloudflare']
+            profile = cloudflare.vault.add("Self-check", "FAKE_DIAGNOSTIC_TOKEN", "diagnostic-password-123")
+            assert cloudflare.vault.token(profile, "diagnostic-password-123") == "FAKE_DIAGNOSTIC_TOKEN"
             window.show()
             def finish():
                 window.grab().save(str(destination / "packaged-window.png"))
-                (destination / "self-check.json").write_text(json.dumps({"ok": True, "frozen": bool(getattr(sys, "frozen", False)), "forms": window.forms.count(), "encrypted_vault": True, "font_families": len(QFontDatabase.families())}), "utf-8")
+                (destination / "self-check.json").write_text(json.dumps({"ok": True, "frozen": bool(getattr(sys, "frozen", False)), "forms": cloudflare.forms.count(), "modules": list(window.workspaces), "encrypted_vault": True, "font_families": len(QFontDatabase.families())}), "utf-8")
                 window.close()
                 app.quit()
             QTimer.singleShot(200, finish)
@@ -1115,7 +1225,8 @@ def main():
         QMessageBox.information(None, "CloudDesk", "CloudDesk 已在运行，请使用现有窗口。")
         return 1
     try:
-        window = Window(root)
+        from .shell import PlatformWindow
+        window = PlatformWindow(root)
     except Exception as exc:
         QMessageBox.critical(None, "启动失败", f"无法读取本地配置：{exc}")
         return 1

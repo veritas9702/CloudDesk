@@ -28,7 +28,7 @@ class Worker(QThread):
         try:
             self.result.emit(self.function(self.report))
         except Cancelled:
-            self.failure.emit("已取消。已发送到 Cloudflare 的请求无法撤回，请查看任务记录。")
+            self.failure.emit("已取消。已发送到平台的请求无法撤回，请查看任务记录。")
         except Exception as exc:
             self.failure.emit(self.sanitize(exc))
 

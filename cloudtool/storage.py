@@ -52,6 +52,13 @@ class Store:
             rows = self.conn.execute("SELECT target,method,path,state,detail,updated,body,before_json,batch FROM audit ORDER BY updated DESC LIMIT 5000").fetchall()
         return [dict(zip(["target", "method", "path", "state", "detail", "updated", "body", "before", "batch"], r)) for r in rows]
 
+    def latest_payload(self,target,method):
+        """Recovery must not depend on the display history's 5,000-row limit."""
+        with self.lock:
+            row=self.conn.execute('SELECT body FROM audit WHERE target=? AND method=? ORDER BY updated DESC LIMIT 1',
+                                  (target,method)).fetchone()
+        return json.loads(row[0]) if row else None
+
     def history_detail(self, aid):
         with self.lock:
             row = self.conn.execute("SELECT target,method,path,state,detail,updated,body,before_json,batch FROM audit WHERE id=?", (aid,)).fetchone()

@@ -2,9 +2,43 @@
 from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtWidgets import QComboBox, QLineEdit, QPlainTextEdit, QSizePolicy, QLabel, QPushButton, QFrame, QVBoxLayout, QFormLayout
 
+
+def table(model):
+    from PySide6.QtWidgets import QTableView, QAbstractItemView, QHeaderView
+    w = QTableView()
+    w.setModel(model)
+    w.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    w.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    w.setAlternatingRowColors(True)
+    w.setSortingEnabled(False)
+    w.setWordWrap(False)
+    w.verticalHeader().hide()
+    w.verticalHeader().setDefaultSectionSize(34)
+    w.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    w.horizontalHeader().setStretchLastSection(True)
+    return w
+
 def combo(items):
     widget = QComboBox()
     widget.addItems([str(x) for x in items])
+    return widget
+
+
+def number_input(minimum, maximum, value, suffix='', decimals=None, width=108):
+    """Consistent keyboard-editable numeric field without native arrow fragments."""
+    from PySide6.QtWidgets import QSpinBox, QDoubleSpinBox, QAbstractSpinBox
+    widget = QSpinBox() if decimals is None else QDoubleSpinBox()
+    if decimals is not None:
+        widget.setDecimals(decimals)
+        widget.setSingleStep(0.1)
+    widget.setRange(minimum, maximum)
+    widget.setValue(value)
+    widget.setSuffix(suffix)
+    widget.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+    widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    widget.setFixedWidth(width)
+    widget.setMinimumHeight(24)
+    widget.setToolTip('直接输入数值，或使用键盘上下键调整')
     return widget
 
 

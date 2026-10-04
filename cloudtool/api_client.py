@@ -38,6 +38,7 @@ class Client:
     BASE = "https://api.cloudflare.com/client/v4"
 
     def __init__(self, token, cancel=None, rate=2.0, transport=None, global_limiter=None):
+        self.progress = None
         self.key = fingerprint(token)
         self._token = token
         self.cancel = cancel or threading.Event()
@@ -55,8 +56,10 @@ class Client:
         if not path.startswith("/") or "://" in path or ".." in path or "?" in path or "#" in path:
             raise ValueError("不允许的 API 路径")
         for attempt in range(5):
+            if self.progress: self.progress('@transport', '等待', f'{method} {path} · 等待请求配额（第 {attempt+1} 次）')
             self.limiter.acquire(self.cancel)
             self.global_limiter.acquire(self.cancel)
+            if self.progress: self.progress('@transport', '请求中', f'{method} {path} · 等待服务器响应')
             try:
                 response = self.http.request(method, self.BASE + path, json=body, params=params)
             except httpx.TransportError as exc:
@@ -64,6 +67,7 @@ class Client:
                     raise ApiError("连接中断，写入结果未知；请读取远端核实后重新生成计划", uncertain=True) from exc
                 if attempt == 4:
                     raise ApiError("读取连接失败或超时，请检查网络") from exc
+                if self.progress: self.progress('@transport', '重试', f'{method} {path} · 连接失败或超时，准备第 {attempt+2}/5 次请求；可以取消')
                 if self.cancel.wait(min(2 ** attempt, 15)):
                     raise Cancelled()
                 continue
@@ -77,6 +81,7 @@ class Client:
                     except (ValueError, TypeError, OverflowError):
                         delay = 2 ** (attempt + 1)
                 delay = max(1, delay)
+                if self.progress: self.progress('@transport', '限流等待', f'Cloudflare 限流，按 Retry-After 等待 {delay:.0f} 秒；可以取消')
                 self.limiter.defer(delay)
                 self.global_limiter.defer(delay)
                 if attempt < 4:

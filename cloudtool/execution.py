@@ -29,7 +29,7 @@ def bounded_map(fn: Callable, values, workers, cancel):
                 yield future.result()
 
 
-def execute(client, store, plan, workers, emit):
+def execute(client, store, plan, workers, emit, read_guard=None):
     if client.key != plan.owner or store.key != plan.owner:
         raise ValueError("计划属于另一个 Token，禁止执行")
     if time.time() - plan.created > 900:
@@ -42,14 +42,17 @@ def execute(client, store, plan, workers, emit):
 
     def run(actions):
         blocked = False
+        blocked_reason = ''
         for a in actions:
             state, detail = "成功", "已完成"
             if blocked or client.cancel.is_set():
-                state, detail = "未执行", "前序操作失败或任务已取消，请重新预览"
+                state, detail = "未执行", ("本域名已停止后续步骤：" + blocked_reason + "；其他域名独立继续处理" if blocked else "任务已取消")
             else:
                 try:
                     if a.guard_path:
-                        if a.guard_kind == "dns_batch":
+                        if read_guard is not None:
+                            current = read_guard(a)
+                        elif a.guard_kind == "dns_batch":
                             wanted = {r["id"] for r in a.before}
                             current = sorted([r for r in client.all(a.guard_path, per_page=1000) if r["id"] in wanted], key=lambda r: r["id"])
                         else:
@@ -59,7 +62,7 @@ def execute(client, store, plan, workers, emit):
                     if client.cancel.is_set():
                         raise Cancelled()
                     store.record(a, plan.batch, "执行中")
-                    emit(a.id, "执行中", "正在请求 Cloudflare")
+                    emit(a.id, "执行中", "正在请求 " + getattr(client, "title", "Cloudflare"))
                     result = client.request(a.method, a.path, a.body).get("result")
                     detail = client.safe(canonical(result))
                 except Cancelled:
@@ -67,6 +70,8 @@ def execute(client, store, plan, workers, emit):
                 except Exception as exc:
                     state = "结果未知" if getattr(exc, "uncertain", False) else "失败"
                     detail, blocked = client.safe(exc), True
+            if state in ("失败", "结果未知"):
+                blocked_reason = a.summary + "：" + detail
             store.record(a, plan.batch, state, detail)
             emit(a.id, state, detail)
         return True

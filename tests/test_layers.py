@@ -10,7 +10,7 @@ from cloudtool.guidance import PERMISSIONS
 class LayerTests(unittest.TestCase):
     def test_lower_layers_do_not_import_ui_or_compatibility_facade(self):
         root = Path(__file__).resolve().parents[1] / 'cloudtool'
-        for name in ('models', 'credentials', 'storage', 'api_client', 'execution', 'cloudflare', 'operations', 'permissions', 'token_templates', 'public_ip', 'browser_token_model', 'browser_launcher', 'extension_setup'):
+        for name in ('crawler/paths', 'crawler/metrics', 'crawler/quality', 'crawler/artifacts', 'crawler/models', 'crawler/repository', 'crawler/document', 'crawler/engine', 'crawler/controller', 'siteadmin/template_management', 'siteadmin/recovery', 'siteadmin/diagnostics', 'siteadmin/templates', 'siteadmin/template_usage', 'siteadmin/template_workflow', 'siteadmin/models', 'siteadmin/client', 'siteadmin/controller', 'domain_names', 'automation', 'automation_model', 'models', 'credentials', 'storage', 'api_client', 'execution', 'cloudflare', 'operations', 'permissions', 'token_templates', 'public_ip', 'browser_token_model', 'browser_launcher', 'extension_setup'):
             tree = ast.parse((root / (name + '.py')).read_text('utf-8'))
             modules = [node.module or '' for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
             modules += [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]

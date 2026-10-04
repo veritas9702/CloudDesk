@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
-if exist "app\CloudDesk\CloudDesk.exe" (
-  start "" "app\CloudDesk\CloudDesk.exe"
+if exist "app\releases\0.16.24\CloudDesk\CloudDesk.exe" (
+  start "" "app\releases\0.16.24\CloudDesk\CloudDesk.exe"
   exit /b
 )
 if exist ".venv\Scripts\pythonw.exe" (

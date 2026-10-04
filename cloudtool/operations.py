@@ -1,6 +1,6 @@
 """Application controller: snapshots and use cases, without Qt or widget access."""
 from copy import deepcopy
-from .execution import execute
+from .execution import execute, bounded_map
 
 class OperationsController:
     def __init__(self, client, store, provider):
@@ -17,7 +17,20 @@ class OperationsController:
 
     def preview_job(self, scope, operation, options, workers):
         scope, options = deepcopy(scope), deepcopy(options)
-        return lambda emit: self.provider.plan(self.resolve(scope) if scope else [], operation, options, workers)
+        def run(emit):
+            if not emit:
+                return self.provider.plan(self.resolve(scope) if scope else [], operation, options, workers)
+            def resolve_one(item):
+                name = item if isinstance(item, str) else item['name']
+                emit('preview:' + name, '读取中', '正在核对域名与权限')
+                try:
+                    return self.provider.resolve([item])[0] if isinstance(item, str) else self.client.get('/zones/' + item['id'])
+                except Exception as exc:
+                    emit('preview:' + name, '失败', self.client.safe(exc))
+                    raise
+            zones = list(bounded_map(resolve_one, scope[0] or scope[1], workers, self.client.cancel)) if scope else []
+            return self.provider.plan(zones, operation, options, workers, emit=emit)
+        return run
 
     def inspect_job(self, scope, kind, options, workers):
         scope, options = deepcopy(scope), deepcopy(options)

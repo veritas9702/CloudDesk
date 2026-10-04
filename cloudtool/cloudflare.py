@@ -31,19 +31,7 @@ SETTINGS = {
 }
 
 
-def domain(text):
-    text = text.strip().rstrip(".").lower()
-    try:
-        text = text.encode("idna").decode("ascii")
-    except UnicodeError:
-        raise ValueError(f"无效域名：{text}")
-    if len(text) > 253 or "." not in text or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", x) for x in text.split(".")):
-        raise ValueError(f"无效域名（不要包含协议、路径或端口）：{text}")
-    return text
-
-
-def domains(text):
-    return list(dict.fromkeys(domain(x) for x in text.splitlines() if x.strip()))
+from .domain_names import domain, domains
 
 
 def dns_name(name, zone):
@@ -143,12 +131,14 @@ class Cloudflare:
                 result = self.client.get(base + "/pagerules")
             elif kind == "规则集":
                 result = self.client.get(base + "/rulesets/phases/" + options["phase"] + "/entrypoint")
+            elif options.get('setting') == 'ssl':
+                result = {key: self.client.get(base + '/settings/' + key) for key in ('ssl_automatic_mode', 'ssl')}
             else:
                 result = self.client.get(base + "/settings/" + options["setting"])
             return {"zone": z["name"], "result": result}
         return list(bounded_map(one, zones, workers, self.client.cancel))
 
-    def plan(self, zones, operation, options, workers=4):
+    def plan(self, zones, operation, options, workers=4, emit=None):
         if operation == "zone_add":
             account = options["account"].strip()
             if not re.fullmatch(r"[a-fA-F0-9]{32}", account):
@@ -175,14 +165,24 @@ class Cloudflare:
                 options["source_rules"] = self.client.get(base + "/rulesets/phases/" + options["phase"] + "/entrypoint").get("rules", [])
 
         def one(z):
-            return self._zone_plan(z, operation, options)
-        actions = []
-        for part in bounded_map(one, zones, workers, self.client.cancel):
+            notes = []
+            if emit: emit('preview:' + z['name'], '读取中', '正在读取记录 / 设置')
+            try:
+                result = self._zone_plan(z, operation, {**options, '_notes': notes})
+            except Exception as exc:
+                if emit: emit('preview:' + z['name'], '失败', self.client.safe(exc))
+                raise
+            detail = f'计划修改 {len(result)} 个请求' if result else (notes[0] if notes else '当前值已符合目标，或没有符合条件的对象')
+            if emit: emit('preview:' + z['name'], '已检查', detail)
+            return result, {'target': z['name'], 'state': '待确认' if result else '无需修改', 'detail': detail}
+        actions, notes = [], []
+        for part, note in bounded_map(one, zones, workers, self.client.cancel):
             actions.extend(part)
+            notes.append(note)
         actions.sort(key=lambda a: a.target)
         if len(actions) > 100000:
             raise ValueError("单次操作超过 100000 条，请分批")
-        return Plan(self.client.key, actions)
+        return Plan(self.client.key, actions, notes=sorted(notes, key=lambda n: n["target"]))
 
     def _zone_plan(self, z, op, opts):
         base, name = f"/zones/{z['id']}", z["name"]
@@ -197,6 +197,8 @@ class Cloudflare:
         elif op.startswith("dns_"):
             path = base + "/dns_records"
             current = self.client.all(path, per_page=100)
+            if not current and op not in {'dns_add', 'dns_upsert'}:
+                opts.get('_notes', []).append('该域名没有 DNS 记录；请先使用“DNS 添加 / 更新”创建或导入记录')
             if op in {"dns_add", "dns_upsert"}:
                 raw = opts["parsed_records"] or [opts["record"]]
                 raw = [r for r in raw if not r.get("zone") or domain(r["zone"]) == name]
@@ -226,10 +228,13 @@ class Cloudflare:
                         add("POST", path, body, summary=f"添加 {body['name']}")
             else:
                 filter_name = opts.get("filter_name", "").strip()
+                filter_names = {dns_name(n, name) for n in re.split(r'[,，;；\s]+', filter_name) if n}
+                if op == 'dns_replace' and not opts.get('filter_content'):
+                    raise ValueError('解析替换需要填写精确的旧记录值，避免误改')
                 filter_type = opts.get("filter_type", "全部")
                 filter_content = opts.get("filter_content", "")
                 for old in current:
-                    if filter_name and old["name"] != dns_name(filter_name, name):
+                    if filter_names and old["name"] not in filter_names:
                         continue
                     if filter_type != "全部" and old["type"] != filter_type:
                         continue

@@ -42,3 +42,4 @@ class Plan:
     actions: list[Action]
     created: float = field(default_factory=time.time)
     batch: str = field(default_factory=lambda: uuid.uuid4().hex)
+    notes: list = field(default_factory=list)

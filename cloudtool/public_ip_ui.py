@@ -43,4 +43,4 @@ class PublicIpWidget(QWidget):
         self.job.deleteLater();self.job=None;self.refresh();self.idle.emit()
     def copy_ip(self):
         if self.active and self.job is None and self.ip.text():
-            QApplication.clipboard().setText(self.ip.text());self.status.setText('已复制公网 IP，请粘贴到 Cloudflare 的客户端 IP 筛选。')
+            QApplication.clipboard().setText(self.ip.text());self.status.setText('已复制公网 IP，请粘贴到对应平台的 API IP 白名单。')
