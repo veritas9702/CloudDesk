@@ -34,6 +34,10 @@ try:
         shell = PlatformWindow(Path(temp) / 'state')
         shell.open_module('crawler'); shell.show(); app.processEvents()
         page = shell.workspaces['crawler']
+        deadline = time.monotonic() + 10
+        while page.initializing and time.monotonic() < deadline:
+            app.processEvents(); time.sleep(.005)
+        assert not page.initializing and not page.initialization_error
         assert Path(page.output.text()) == Path(temp) / 'Desktop' / 'WebsiteTemplates'
         assert Path(page.output.text()).is_dir()
         page.domains.setPlainText(f'http://127.0.0.1:{server.server_port}/')
@@ -94,6 +98,9 @@ try:
         page.domains.setPlainText('https://pending.example/\nhttps://failed.example/')
         assert shell.unload_module('crawler')
         shell.open_module('crawler'); app.processEvents()
+        deadline = time.monotonic() + 10
+        while shell.workspaces['crawler'].initializing and time.monotonic() < deadline:
+            app.processEvents(); time.sleep(.005)
         assert shell.workspaces['crawler'].model.rows[0]['state'] == '已完成'
         assert shell.workspaces['crawler'].domains.toPlainText() == 'https://pending.example/\nhttps://failed.example/'
         assert Path(shell.workspaces['crawler'].output.text()).resolve() == (Path(temp) / 'templates').resolve()

@@ -6,11 +6,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('main.py','README.md','requirements.txt','requirements-dev.txt','requirements-build.txt','start.bat','setup.bat','build.bat','cleanup.bat','CloudDesk.spec','.gitignore')
-FOLDERS = ('app/releases/0.16.24','cloudtool','browser_extension','docs','tests','tools','examples','THIRD_PARTY_LICENSES')
+FOLDERS = ('app/releases/0.16.27','cloudtool','browser_extension','docs','tests','tools','examples','THIRD_PARTY_LICENSES')
 FORBIDDEN = {'pending-input.json','pending-input.tmp','profiles.json','cookies','login data','history','browser-authorization','.venv','.git','__pycache__','.local-browsers','.clouddesk-capture-work','WebsiteTemplates'.lower()}
 
 def package(destination):
-    if not (ROOT/'app/releases/0.16.24/CloudDesk/CloudDesk.exe').is_file():
+    if not (ROOT/'app/releases/0.16.27/CloudDesk/CloudDesk.exe').is_file():
         raise SystemExit('Run build.bat first.')
     destination=Path(destination).resolve()
     if destination==ROOT or any(destination.is_relative_to(ROOT/folder) for folder in FOLDERS):

@@ -25,6 +25,7 @@ from .pipeline_api import STAGES, TITLES
 from .site_catalog import SiteCatalog, domain_lines, imported_sites, site_visit_url
 from .site_table import SiteTableModel
 from .rebuild import RebuildWorkflow
+from .direct_batch import DirectBatch
 
 
 class AccountDialog(QDialog):
@@ -85,13 +86,15 @@ class SitePage(QWidget):
         self.workers = number_input(1, 4, 1, ' 个'); self.rate = number_input(.1, 4, 2, ' 次/秒', decimals=1, width=120)
         row.addWidget(label('并发站点')); row.addWidget(self.workers); row.addWidget(label('请求上限')); row.addWidget(self.rate); row.addStretch()
         self.config_toggle=button('收起配置',self.toggle_config);row.addWidget(self.config_toggle)
-        row.addWidget(button('① 登录并预览', self.preview, True))
-        self.execute_button = button('② 确认执行', self.execute_plan, True); row.addWidget(self.execute_button)
+        self.direct_button=button('一键开始',self.start_direct,True);row.addWidget(self.direct_button)
+        self.direct_button.setToolTip('后台逐站校验并执行加工与发布；勾选下方选项时，模板问题仅对未发布站点换模板重建一次。')
+        row.addWidget(button('仅预览', self.preview))
+        self.execute_button = button('按预览执行', self.execute_plan); row.addWidget(self.execute_button)
         body.addWidget(self.toolbar)
         self.plan_model = TableModel([('target','域名'), ('summary','操作'), ('state','状态'), ('progress','进度'), ('detail','结果')], centered=True)
         self.plan_table = table(self.plan_model); self.plan_table.setColumnWidth(0,220); self.plan_table.setColumnWidth(1,300); self.plan_table.setColumnWidth(2,90); self.plan_table.setColumnWidth(3,90)
         result_bar = QHBoxLayout(); result_title=label('执行步骤', 'sectionTitle'); result_title.setWordWrap(False); result_bar.addWidget(result_title); result_bar.addStretch()
-        self.auto_rebuild=QCheckBox('失败自动重建一次');self.toolbar.layout().insertWidget(4,self.auto_rebuild)
+        self.auto_rebuild=QCheckBox('模板问题重建一次');self.auto_rebuild.setChecked(True);self.toolbar.layout().insertWidget(4,self.auto_rebuild)
         self.recover_button = button('重试 / 恢复未完成流程', self.recover)
         result_bar.addWidget(button('结果汇总 / 处理失败', self.show_batch_result))
         result_bar.addWidget(button('核对 TDK', self.show_tdk))
@@ -145,6 +148,7 @@ class SitePage(QWidget):
 
     def error(self, error): QMessageBox.warning(self, '操作提示', self.client.safe(error) if self.client else str(error))
     def update_actions(self):
+        self.direct_button.setEnabled(not self.busy and self.client is not None and self.with_pipeline.isChecked())
         self.execute_button.setEnabled(not self.busy and bool(self.plan and self.plan.actions))
         self.recover_button.setEnabled(not self.busy and self.client is not None)
         self.update_site_actions()
@@ -176,7 +180,7 @@ class SitePage(QWidget):
         self.client = self.store = self.controller = None
         self.all_sites=[];self.auto_sites_text=None;self.imported_sites={}
         self.invalidate(); self.domains.clear(); self.index_by_id = {}
-        self.with_template.setChecked(False);self.with_pipeline.setChecked(False);self.auto_rebuild.setChecked(False);self.template_root.clear()
+        self.with_template.setChecked(False);self.with_pipeline.setChecked(False);self.auto_rebuild.setChecked(True);self.template_root.clear()
         self.config_scroll.setVisible(True);self.config_toggle.setText('收起配置'); self.details.clear()
         for model in (self.plan_model, self.sites_model, self.history_model): model.reset([])
         self.template_panel.show_rows([])
@@ -228,8 +232,6 @@ class SitePage(QWidget):
         if not self.controller: self.error('请先添加后台'); return
         try:
             self.invalidate()
-            if self.auto_rebuild.isChecked() and (not self.with_pipeline.isChecked() or not self.template_root.text().strip()):
-                raise ValueError('自动重建需勾选六步加工，并选择含备用模板的父目录')
             sites=parse_sites(self.domains.toPlainText(),self.wildcard.isChecked(),self.protocol.currentText())
             sites=tuple(self.imported_sites.get(site.code,site) for site in sites)
             self.index_by_id={}
@@ -243,13 +245,6 @@ class SitePage(QWidget):
                 if not self.template_root.text().strip(): raise ValueError('请选择模板父目录')
                 job=TemplateWorkflow(self.client,self.store,self.usage).preview_job(sites,self.template_root.text().strip())
             else: job=self.controller.preview_job(sites)
-            if self.auto_rebuild.isChecked():
-                original_job=job;root=self.template_root.text().strip()
-                def job(emit):
-                    result=original_job(emit)
-                    if not result[0].actions and result[1]:
-                        return RebuildWorkflow(self.client,self.store,self.usage,self.pipeline_store).preview_job([r['target'] for r in result[1]],root)(emit)
-                    return result
             self.start(job,self.show_plan,self.preview_failed)
         except Exception as exc: self.error(exc)
 
@@ -293,24 +288,50 @@ class SitePage(QWidget):
             note=('将处理工作副本：先应用已分配 TDK，再转换（保留 TDK）、安全清理统计代码、改写外链、注入 H1 和占位符。'
                   '\n六步全部成功后自动发布上线；已有模板跳过上传。取消只停止客户端调度，已提交后台任务继续并保留 ID。')
         if rebuilding or processing and self.auto_rebuild.isChecked():
-            note+='\n已启用一次重建：会删除失败的未发布站点及远端目录，换用其他通过预检的本地模板，重新创建并执行全部流程。第二次失败停止，导出报告人工处理。'
+            note+='\n已启用一次重建：会删除明确模板问题的未发布站点及远端目录，换用其他通过预检的本地模板，重新创建并执行全部流程。第二次失败停止，导出报告人工处理。'
         if rebuilding:
             note+='\n重建站点六步加工全部成功后发布上线。'
         if QMessageBox.question(self,'确认工作流',f'在 {self.client.credentials.url} 执行 {len(self.plan.actions)} 个步骤？\n{note}\n已完成操作不会自动回滚。') != QMessageBox.StandardButton.Yes: return
         recovery=RebuildWorkflow(self.client,self.store,self.usage,self.pipeline_store)
         controller=recovery if rebuilding else (SitePipeline(self.client,self.store,self.usage,self.pipeline_store) if processing else (TemplateWorkflow(self.client,self.store,self.usage) if workflow else self.controller))
         job = controller.execute_job(self.plan,self.workers.value())
-        if processing and self.auto_rebuild.isChecked():
-            job=recovery.after_job(job,[r['target'] for r in self.plan_model.rows if r['state']=='需处理'],self.template_root.text().strip(),self.workers.value())
+        if processing and self.auto_rebuild.isChecked() and self.template_root.text().strip():
+            job=recovery.after_job(job,[],self.template_root.text().strip(),self.workers.value())
         self.plan = None
-        def done(_):
-            self.jobs.flush()
-            outcomes=self.batch_outcomes()
-            success=sum(r['state']=='成功' for r in outcomes)
-            message=f'执行结束：{len(outcomes)} 个域名，成功 {success}，需处理 {len(outcomes)-success}。单个域名失败不影响其余域名。'
-            self.status.setText(message);self.config_summary.setText(message)
-            if any(r['state']!='成功' for r in outcomes):self.show_batch_result()
-        self.start(job, done)
+        self.start(job, self.execution_done)
+
+    def execution_done(self, _):
+        self.jobs.flush()
+        outcomes=self.batch_outcomes()
+        success=sum(r['state']=='成功' for r in outcomes)
+        message=f'执行结束：{len(outcomes)} 个域名，成功 {success}，需处理 {len(outcomes)-success}。单个域名失败不影响其余域名。'
+        self.status.setText(message);self.config_summary.setText(message)
+        if any(r['state']!='成功' for r in outcomes):self.show_batch_result()
+
+    def start_direct(self):
+        if self.busy:return
+        if not self.client:self.error('请先添加后台');return
+        try:
+            if not self.with_pipeline.isChecked():raise ValueError('一键开始需勾选加工与发布流程')
+            sites=parse_sites(self.domains.toPlainText(),self.wildcard.isChecked(),self.protocol.currentText())
+            sites=tuple(self.imported_sites.get(site.code,site) for site in sites)
+            root=self.template_root.text().strip()
+            if self.with_template.isChecked() and not root:raise ValueError('请选择模板父目录')
+            self.plan=None;self.index_by_id={};self.details.clear()
+            self.plan_model.reset([dict(target=s.code,summary='准备预览',state='排队中',progress='—',detail='等待自动校验；通过后立即执行') for s in sites])
+            recovery_note='模板问题仅重建一次' if self.auto_rebuild.isChecked() else '失败保留断点并汇总'
+            self.config_summary.setText(f'一键执行 {len(sites)} 个站点：逐站校验 → 加工 → 发布；{recovery_note}。')
+            job=DirectBatch(self.client,self.store,self.usage,self.pipeline_store).job(
+                sites,root,self.with_template.isChecked(),self.workers.value(),self.auto_rebuild.isChecked())
+            def failed(message):
+                self.jobs.flush()
+                for index, row in enumerate(self.plan_model.rows):
+                    if row.get('state') not in ('成功','已跳过','失败','结果未知','需处理'):
+                        row.update(state='未执行',detail=message)
+                self.plan_model.reset(self.plan_model.rows)
+                self.execution_done(None)
+            self.start(job,self.execution_done,failed)
+        except Exception as exc:self.error(exc)
 
     def batch_outcomes(self):
         groups={}
@@ -372,7 +393,28 @@ class SitePage(QWidget):
         self.start(self.controller.list_job,ready,self.error)
 
     def consume(self, events):
-        changed = False
+        changed = set()
+        plans = {}
+        for key in list(events):
+            if key.startswith('@direct-plan:'):
+                _, detail = events.pop(key)
+                plans[key.removeprefix('@direct-plan:')] = json.loads(detail)
+        if plans:
+            rows = [r for r in self.plan_model.rows if r['target'] not in plans]
+            rows.extend(dict(action_id=a['id'], target=a['target'], stage=a['stage'],
+                             summary=a['summary'], state='等待', progress='—',
+                             detail='校验通过，自动执行') for actions in plans.values() for a in actions)
+            self.plan_model.reset(rows)
+            self.index_by_id = {r['action_id']: i for i, r in enumerate(rows) if r.get('action_id')}
+        for key in list(events):
+            if key.startswith('@direct-issue:'):
+                state,detail=events.pop(key);target=key.removeprefix('@direct-issue:')
+                events.pop('@preview:'+target,None)
+                for index, row in enumerate(self.plan_model.rows):
+                    if row['target']==target and not row.get('action_id'):
+                        row.update(state=state,detail=detail);changed.add(index)
+                if not any(r['target']==target and not r.get('action_id') for r in self.plan_model.rows):
+                    self.plan_model.reset(self.plan_model.rows+[dict(target=target,summary='需处理',state=state,detail=detail,progress='—')])
         replacement=events.pop('@rebuild-plan',None)
         if replacement:
             self.details.clear()
@@ -380,6 +422,7 @@ class SitePage(QWidget):
             rows=[r for r in self.plan_model.rows if r['target'] not in targets]
             rows.extend(dict(action_id=r['id'],target=r['target'],stage=r['stage'],summary=r['summary'],detail=r['detail'],state='等待',progress='—') for r in data['actions'])
             rows.extend(data['issues']);self.plan_model.reset(rows)
+            changed.clear()
             self.index_by_id={r['action_id']:i for i,r in enumerate(rows) if r.get('action_id')}
         site_updates=[json.loads(detail) for aid,(state,detail) in events.items() if aid.startswith('@site:')]
         if site_updates:
@@ -391,8 +434,8 @@ class SitePage(QWidget):
                 continue
             if aid.startswith('@preview:'):
                 target=aid.removeprefix('@preview:')
-                for row in self.plan_model.rows:
-                    if row['target']==target:row.update(state=state,detail=detail);changed=True
+                for index, row in enumerate(self.plan_model.rows):
+                    if row['target']==target and not row.get('action_id'):row.update(state=state,detail=detail);changed.add(index)
                 continue
             index = self.index_by_id.get(aid)
             if index is not None:
@@ -410,7 +453,7 @@ class SitePage(QWidget):
                         detail=f"后台任务 #{decoded['task_id']} · {decoded.get('task_status','')} · 失败 {decoded.get('failed',0)}"
 
                 except (ValueError,TypeError): pass
-                self.plan_model.rows[index].update(state=state,detail=detail); changed = True
+                self.plan_model.rows[index].update(state=state,detail=detail); changed.add(index)
                 if state=='成功' and self.plan_model.rows[index].get('stage')=='upload':
                     self.plan_model.rows[index]['progress']='100%' 
                 elif state=='成功' and self.plan_model.rows[index].get('stage') in STAGES:
@@ -418,8 +461,10 @@ class SitePage(QWidget):
                 if state in ('失败','结果未知'):
                     self.plan_table.selectRow(index)
         if changed:
-            self.plan_model.dataChanged.emit(self.plan_model.index(0,2),self.plan_model.index(len(self.plan_model.rows)-1,4))
-            self.show_detail()
+            for index in sorted(changed):
+                self.plan_model.dataChanged.emit(self.plan_model.index(index,2),self.plan_model.index(index,4))
+            if any(index.row() in changed for index in self.plan_table.selectionModel().selectedRows()):
+                self.show_detail()
 
     def read_sites(self,force_fill=False):
         if self.busy:

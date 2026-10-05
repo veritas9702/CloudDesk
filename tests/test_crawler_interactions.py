@@ -17,6 +17,8 @@ class InteractionTests(unittest.TestCase):
             root=Path(tmp)
             with patch('cloudtool.crawler.ui.desktop_directory', return_value=str(root/'desktop')):
                 page=CapturePage(root/'state')
+                page.initial_future.result(timeout=10)
+                page.flush()
             try:
                 key=page.controller.create('https://failed.test/',str(root/'out'),Settings())[0]
                 repo=Repository(root/'state')
@@ -40,6 +42,7 @@ class InteractionTests(unittest.TestCase):
                 self.assertEqual(page.model.rows,[])
                 page.refresh([old])
                 self.assertEqual(page.model.rows,[])
+                page.delete_future.result(timeout=10); page.flush()
                 self.assertEqual(page.controller.snapshot(),[])
             finally:
                 if page.delete_future:
@@ -52,6 +55,8 @@ class InteractionTests(unittest.TestCase):
             root=Path(tmp)
             with patch('cloudtool.crawler.ui.desktop_directory', return_value=str(root/'desktop')):
                 page=CapturePage(root/'state')
+                page.initial_future.result(timeout=10)
+                page.flush()
             try:
                 key=page.controller.create('https://preview.test/',str(root/'out'),Settings())[0]
                 repo=Repository(root/'state')
@@ -80,6 +85,8 @@ class InteractionTests(unittest.TestCase):
             root=Path(tmp)
             with patch('cloudtool.crawler.ui.desktop_directory', return_value=str(root/'desktop')):
                 page=CapturePage(root/'state')
+                page.initial_future.result(timeout=10)
+                page.flush()
             try:
                 ids=page.controller.create('https://small.test/\nhttps://large.test/\nhttps://boundary.test/',str(root/'out'),Settings())
                 repo=Repository(root/'state')
@@ -119,6 +126,8 @@ class InteractionTests(unittest.TestCase):
             root=Path(tmp)
             with patch('cloudtool.crawler.ui.desktop_directory', return_value=str(root/'desktop')):
                 page=CapturePage(root/'state')
+                page.initial_future.result(timeout=10)
+                page.flush()
             try:
                 ids=page.controller.create('\n'.join(f'https://site{i}.test/' for i in range(5)),str(root/'out'),Settings())
                 repo=Repository(root/'state')
@@ -152,6 +161,8 @@ class InteractionTests(unittest.TestCase):
             root=Path(tmp)
             with patch('cloudtool.crawler.ui.desktop_directory', return_value=str(root/'desktop')):
                 page=CapturePage(root/'state')
+                page.initial_future.result(timeout=10)
+                page.flush()
             try:
                 key=page.controller.create('https://missing.test/',str(root/'out'),Settings())[0]
                 page.refresh()

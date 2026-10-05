@@ -13,6 +13,10 @@ from cloudtool.crawler.ui import CapturePage
 app = QApplication([])
 with tempfile.TemporaryDirectory() as temp, patch('cloudtool.crawler.ui.desktop_directory', return_value=str(Path(temp)/'Desktop')):
     page = CapturePage(Path(temp)/'state')
+    deadline = time.monotonic() + 10
+    while page.initializing and time.monotonic() < deadline:
+        app.processEvents(); time.sleep(.005)
+    assert not page.initializing and not page.initialization_error
     page.controller.run_job = lambda *args, **kwargs: lambda report: page.controller.snapshot()
     page.domains.setPlainText('\n'.join(f'https://site{i}.test/' for i in range(200)))
     ticks = []

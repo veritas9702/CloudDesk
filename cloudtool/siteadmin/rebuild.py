@@ -11,6 +11,7 @@ from .templates import template_paths,files,digest,pack
 from .template_workflow import TemplateSteps,STAGES as UPLOAD_STAGES,TITLES as UPLOAD_TITLES
 from .pipeline import PipelineSteps
 from .pipeline_api import PipelineAPI,STAGES,TITLES
+from .recovery_policy import template_failure
 
 
 class BodyProbe(HTMLParser):
@@ -141,7 +142,7 @@ class RebuildWorkflow:
                 emit(aid,state,detail)
                 if state in ('失败','结果未知'):
                     row=self.store.history_detail(aid)
-                    if row and row['path'] != 'publish':failures.add(row['target'])
+                    if row and template_failure(row['path'],state,detail):failures.add(row['target'])
             job(capture)
             if self.client.cancel.is_set() or not failures:return
             plan,issues=self.preview_job(sorted(failures),root)(emit)

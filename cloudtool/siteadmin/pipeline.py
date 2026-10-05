@@ -16,12 +16,22 @@ class SitePipeline:
         if client.key != store.key: raise ValueError('后台账户不匹配')
         self.client, self.store, self.usage, self.checkpoints = client, store, usage, checkpoints
 
-    def preview_job(self, sites, root='', upload=False):
+    def allocate_tdk(self, target):
+        tdk = self.checkpoints.allocation(self.client.key,target)
+        if tdk: return tdk
+        for attempt in range(5):
+            candidate = PipelineAPI(self.client).generate()
+            try: return self.checkpoints.allocate(self.client.key,target,candidate)
+            except ValueError:
+                if attempt == 4: raise ValueError('词库连续生成重复标题，请扩充词库后重试')
+
+    def preview_job(self, sites, root='', upload=False, remote_snapshot=None):
         sites = tuple(sites)
         def run(emit):
             emit = emit or (lambda *args: None)
-            self.client.login(); remote = self.client.sites()
-            api = PipelineAPI(self.client)
+            if remote_snapshot is None:
+                self.client.login(); remote = self.client.sites()
+            else: remote = deepcopy(remote_snapshot)
             owned = {e['target']:e for e in self.usage.rows() if e['owner']==self.client.key}
             prepared, skipped, need_upload = {}, [], []
             for index, site in enumerate(sites, 1):
@@ -40,14 +50,7 @@ class SitePipeline:
                     if needs and not upload: raise ValueError('站点尚无可用页面，请先勾选上传模板并完成同步扫描')
                     if not needs and (type(row.get('page_count')) is not int or row['page_count']<=0):
                         raise ValueError('无法确认已有模板的页面数')
-                    tdk = self.checkpoints.allocation(self.client.key, site.code)
-                    if not tdk:
-                        for attempt in range(5):
-                            candidate = api.generate()
-                            try:
-                                tdk = self.checkpoints.allocate(self.client.key,site.code,candidate); break
-                            except ValueError:
-                                if attempt==4: raise ValueError('词库连续生成重复标题，请扩充词库后重试')
+                    tdk = self.allocate_tdk(site.code)
                     site_body={k:row[k] for k in site.body()} if row and not needs else site.body()
                     prepared[site.code] = dict(site=site_body,site_id=row['id'] if row else 0,tdk=tdk,
                                               template_digest=entry['digest'] if entry else '')
@@ -92,17 +95,20 @@ class SitePipeline:
             return '任务身份核对通过，已保存任务 ID；重新预览后继续查询原任务'
         return run
 
-    def execute_job(self, plan, workers=1):
+    def execute_job(self, plan, workers=1, remote_snapshot=None, upload_slot=None):
         snapshot = deepcopy(plan)
         def run(emit):
             if snapshot.owner != self.client.key: raise ValueError('计划属于其他后台')
-            self.client.login()
-            remote = {r['id']:r for r in self.client.sites()}
+            if remote_snapshot is None:
+                self.client.login(); rows = self.client.sites()
+            else: rows = remote_snapshot
+            remote = {r['id']:r for r in rows}
             ids = {(a.target,a.path):a.id for a in snapshot.actions}
             with tempfile.TemporaryDirectory(prefix='clouddesk-template-') as temp:
                 template = TemplateSteps(self.client,self.usage,Path(temp),
                     lambda target,sent,total: emit(ids[(target,'upload')],'执行中',json.dumps(
                         dict(upload_progress=int(sent*100/total) if total else 0,sent=sent,total=total))))
+                if upload_slot is not None: template.upload_slot = upload_slot
                 pipeline = PipelineSteps(self.client,self.usage,self.checkpoints,remote,
                     lambda target,stage,text: emit(ids[(target,stage)],'执行中',text))
                 class Adapter:

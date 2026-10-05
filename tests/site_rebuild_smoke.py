@@ -28,9 +28,12 @@ try:
             while page.busy and time.monotonic()<deadline:app.processEvents();time.sleep(.003)
             app.processEvents();assert not page.busy;assert not errors,errors
         page.domains.setPlainText('one.com');page.template_root.setText(str(fixture.sources))
-        page.with_pipeline.setChecked(True);page.auto_rebuild.setChecked(True);page.preview();wait()
-        assert len(page.plan.actions)==7
-        with patch.object(QMessageBox,'question',return_value=QMessageBox.StandardButton.Yes):page.execute_plan()
+        page.with_pipeline.setChecked(True);page.auto_rebuild.setChecked(True)
+        if '--direct' in sys.argv:
+            with patch.object(QMessageBox,'question',side_effect=AssertionError('unexpected confirmation')):page.start_direct()
+        else:
+            page.preview();wait();assert len(page.plan.actions)==7
+            with patch.object(QMessageBox,'question',return_value=QMessageBox.StandardButton.Yes):page.execute_plan()
         wait();assert fixture.server.deleted==[1]
         assert len(page.plan_model.rows)==14,page.plan_model.rows
         assert all(r['state']=='成功' for r in page.plan_model.rows),page.plan_model.rows

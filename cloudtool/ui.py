@@ -209,7 +209,7 @@ class Window(QMainWindow):
         self.nav.addItems(["域名总览 / 导出", "添加域名 / Zone", "DNS 添加 / 更新", "解析替换 / Replace", "删除解析 / 清空", "删除域名 / Zone", "解析代理状态", "SSL / TLS 证书", "SSL 自定义主机名", "清除缓存 / 配置", "传输优化", "页面 / WAF 规则", "其他设置", "高级自动化"])
         self.nav.currentRowChanged.connect(self.navigate)
         sl.addWidget(self.nav, 1)
-        sl.addWidget(label("TOKEN 隔离  ·  本地运行\nv0.16.24  /  Cloudflare API v4", "sideCaption"))
+        sl.addWidget(label("TOKEN 隔离  ·  本地运行\nv0.16.27  /  Cloudflare API v4", "sideCaption"))
         outer.addWidget(side)
         main = QWidget()
         main.setObjectName("workspace")

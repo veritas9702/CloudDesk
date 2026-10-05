@@ -96,14 +96,20 @@ class Repository:
         self.db.commit()
         return ids
 
-    def tasks(self, include_deleted=False):
+    def tasks(self, include_deleted=False, *, metrics=True):
         tasks = [dict(r) for r in self.db.execute('SELECT * FROM tasks ' + ('' if include_deleted else 'WHERE deleted=0 ') + 'ORDER BY created DESC')]
-        aliases = {r['task']: r['final_url'] for r in self.db.execute('SELECT u.task,u.final_url FROM urls u JOIN tasks t ON t.id=u.task AND t.seed=u.url WHERE u.final_url != ?',( '',))}
+        if not metrics:
+            return tasks
+        aliases = self.home_aliases()
         sizes = {r['task']: r['bytes'] for r in self.db.execute("SELECT task,SUM(size) AS bytes FROM (SELECT task,path,MAX(size) AS size FROM urls WHERE state='done' GROUP BY task,path) GROUP BY task")}
         for task in tasks:
             task['template_bytes'] = sizes.get(task['id'], 0)
             task['aliases'] = [aliases[task['id']]] if task['id'] in aliases else []
         return tasks
+
+    def home_aliases(self):
+        return {r['task']: r['final_url'] for r in self.db.execute(
+            'SELECT u.task,u.final_url FROM tasks t JOIN urls u ON u.task=t.id AND u.url=t.seed WHERE u.final_url != ?', ('',))}
 
     def task(self, key):
         return dict(self.db.execute('SELECT * FROM tasks WHERE id=?', (key,)).fetchone())

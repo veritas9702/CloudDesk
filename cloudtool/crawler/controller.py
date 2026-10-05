@@ -26,7 +26,7 @@ class CaptureController:
                 if maximum is not None:
                     repo.preference('template_limit_mb', str(validate_mb(maximum)))
                 maximum = limit_mb(repo)
-                for task in repo.tasks():
+                for task in repo.tasks(metrics=False):
                     if task['state'] in ('等待', '采集中', '整理中'): continue
                     try:
                         if exceeds(repo, task, maximum): discard(repo, task['id'], maximum)
@@ -35,31 +35,38 @@ class CaptureController:
                 return repo.tasks()
             finally: repo.close()
 
-    def __init__(self, root):
+    def __init__(self, root, *, recover=True):
         self.root = Path(root)
         self.prepare_lock = threading.Lock()
-        repo = Repository(root)
-        for task in repo.tasks(include_deleted=True):
-            if task.get('purge_pending'):
-                try:
-                    purge_task(repo, task['id'])
-                except (OSError, ValueError):
-                    pass
-        # An interrupted process leaves a recoverable task, never a fake success.
-        for task in repo.tasks():
-            if task['state'] in ('采集中', '整理中', '等待'):
-                repo.update_task(task['id'], '已暂停', '上次运行中断；选择任务后点击继续采集')
-            elif not task['work'] or task['published']:
-                rows = repo.rows(task['id'])
-                sizes = {r['path']:r['size'] for r in rows if r['state'] == 'done'}
-                verdict = assess(task['seed'], rows, repo.warnings(task['id']), sum(sizes.values()))
-                try:
-                    if not task['work'] or not verdict.publish:
-                        settle(repo, task, verdict.publish)
-                        repo.update_task(task['id'], verdict.state, verdict.detail)
-                except (OSError, ValueError) as exc:
-                    repo.update_task(task['id'], '需检查目录', str(exc))
-        repo.close()
+        if recover:
+            self.recover()
+
+    def recover(self):
+        """Disk recovery belongs on a worker when used by the desktop view."""
+        repo = Repository(self.root)
+        try:
+            for task in repo.tasks(include_deleted=True, metrics=False):
+                if task.get('purge_pending'):
+                    try:
+                        purge_task(repo, task['id'])
+                    except (OSError, ValueError):
+                        pass
+            # An interrupted process leaves a recoverable task, never a fake success.
+            for task in repo.tasks(metrics=False):
+                if task['state'] in ('采集中', '整理中', '等待'):
+                    repo.update_task(task['id'], '已暂停', '上次运行中断；选择任务后点击继续采集')
+                elif not task['work'] or task['published']:
+                    rows = repo.rows(task['id'])
+                    sizes = {r['path']:r['size'] for r in rows if r['state'] == 'done'}
+                    verdict = assess(task['seed'], rows, repo.warnings(task['id']), sum(sizes.values()))
+                    try:
+                        if not task['work'] or not verdict.publish:
+                            settle(repo, task, verdict.publish)
+                            repo.update_task(task['id'], verdict.state, verdict.detail)
+                    except (OSError, ValueError) as exc:
+                        repo.update_task(task['id'], '需检查目录', str(exc))
+        finally:
+            repo.close()
 
     def snapshot(self):
         repo = Repository(self.root)
@@ -75,7 +82,7 @@ class CaptureController:
             draft = '\n'.join(dict.fromkeys(t['seed'] for t in reversed(self.snapshot()) if not t['published']))
         repo = Repository(self.root)
         try:
-            removed = {t['seed'] for t in repo.tasks(include_deleted=True)
+            removed = {t['seed'] for t in repo.tasks(include_deleted=True, metrics=False)
                        if t.get('deleted') and t['state'] == '已自动清理'}
         finally:
             repo.close()
@@ -87,6 +94,10 @@ class CaptureController:
                 pass
             kept.append(value)
         return '\n'.join(kept)
+
+    def save_input(self, text):
+        """Saving an editor draft must not open or scan the capture database."""
+        Repository.pending_input(self.root, text)
 
     def create(self, text, output, settings):
         urls = seeds(text)
@@ -114,13 +125,14 @@ class CaptureController:
         repo = Repository(self.root)
         try:
             existing = {}
-            for task in repo.tasks(include_deleted=True):
+            aliases = repo.home_aliases()
+            for task in repo.tasks(include_deleted=True, metrics=False):
                 if task.get('deleted') and not task['published']:
                     continue
                 existing.setdefault(task['seed'], task)
-                home = repo.db.execute('SELECT final_url FROM urls WHERE task=? AND url=?', (task['id'], task['seed'])).fetchone()
-                if home and home[0]:
-                    existing.setdefault(home[0], task)
+                home = aliases.get(task['id'])
+                if home:
+                    existing.setdefault(home, task)
             run, skipped, fresh = [], [], []
             for url in urls:
                 task = existing.get(url)
@@ -188,7 +200,7 @@ class CaptureController:
     def cleanup_deleted(self):
         repo = Repository(self.root)
         try:
-            for task in repo.tasks(include_deleted=True):
+            for task in repo.tasks(include_deleted=True, metrics=False):
                 if task.get('purge_pending') and task['state'] not in ('等待', '采集中', '整理中'):
                     purge_task(repo, task['id'])
             return repo.tasks()
@@ -219,7 +231,7 @@ class CaptureController:
                 for key in ids:
                     repo.upgrade_settings(key, settings.validate() if settings else None)
                 asyncio.run(Engine(repo, cancel, report, transport).run(ids, incoming))
-                for task in repo.tasks(include_deleted=True):
+                for task in repo.tasks(include_deleted=True, metrics=False):
                     if task.get('purge_pending'):
                         try:
                             purge_task(repo, task['id'])

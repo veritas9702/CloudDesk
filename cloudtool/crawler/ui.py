@@ -66,19 +66,24 @@ class CaptureTableModel(TableModel):
 class CapturePage(QWidget):
     def __init__(self, root):
         super().__init__()
-        self.controller = CaptureController(root)
+        self.controller = CaptureController(root, recover=False)
+        self.initializing = True
+        self.initialization_error = False
         self.busy = False
         self.worker = None
         self.cancel = threading.Event()
         self.detail_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='capture-detail')
         self.detail_future = None
         self.detail_requested = None
+        self.draft_future = None
+        self.draft_requested = None
         self.row_indexes = {}
         self.deleted_ids = set()
         self.finish_message = ''
         self.incoming = queue.Queue()
         self.append_future = None
         self.delete_future = None
+        self.delete_refreshing = False
         self.preview = Preview()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -87,7 +92,7 @@ class CapturePage(QWidget):
         heading = QHBoxLayout()
         heading.addWidget(title)
         heading.addStretch()
-        self.template_limit_mb = self.controller.template_limit()
+        self.template_limit_mb = 300
         self.policy_button = button(f'自动清理：超过 {self.template_limit_mb} MB', self.configure_size_policy)
         heading.addWidget(self.policy_button)
         layout.addLayout(heading)
@@ -111,10 +116,7 @@ class CapturePage(QWidget):
         output_row = QHBoxLayout()
         self.output = line('选择保存模板的父目录，每个站点独立保存')
         directory_error = ''
-        try:
-            self.output.setText(self.controller.output_directory(desktop_directory()))
-        except OSError as exc:
-            directory_error = '无法创建保存目录，请手动选择可写位置：' + str(exc)
+        desktop = desktop_directory()
         self.choose_button = button('选择目录', self.choose)
         output_row.addWidget(self.output)
         output_row.addWidget(self.choose_button)
@@ -198,7 +200,7 @@ class CapturePage(QWidget):
         self.state_filter.currentIndexChanged.connect(self.apply_filter)
         self.size_filter.toggled.connect(self.apply_filter)
         self.size_limit.valueChanged.connect(self.apply_filter)
-        self.model.dataChanged.connect(self.update_bulk_actions)
+        self.model.dataChanged.connect(self.check_changed)
         layout.addWidget(self.view, 1)
         toolbar = QHBoxLayout()
         toolbar.addWidget(label('任务与断点保存在本机，切换模块后继续运行。'), 1)
@@ -224,18 +226,26 @@ class CapturePage(QWidget):
         self.timer.setInterval(200)
         self.timer.timeout.connect(self.flush)
         self.timer.start()
-        self.refresh()
+        self.refresh([])
         self.draft_timer = QTimer(self)
         self.draft_timer.setSingleShot(True)
         self.draft_timer.setInterval(500)
         self.draft_timer.timeout.connect(self.save_draft)
-        self.domains.setPlainText(self.controller.pending_input())
-        self.remove_saved_inputs(self.model.rows)
         self.domains.textChanged.connect(lambda: self.draft_timer.start())
-        if self.model.rows:
-            self.delete_future = self.detail_pool.submit(self.controller.enforce_template_limit)
-            self.status.setText('正在后台检查已有模板大小，超限模板会自动删除…')
-            self.update_actions()
+        def initialize():
+            self.controller.recover()
+            output = self.controller.output_directory(desktop)
+            limit = self.controller.template_limit()
+            rows = self.controller.enforce_template_limit()
+            return output, limit, rows, self.controller.pending_input()
+        self.initial_future = self.detail_pool.submit(initialize)
+        self.status.setText('正在后台恢复采集记录并检查模板，可切换其他模块…')
+        self.update_actions()
+
+    def check_changed(self, top, bottom, roles=None):
+        # Progress cells must not trigger another full-table selection scan.
+        if top.column() == 0:
+            self.update_bulk_actions()
 
     def configure_size_policy(self):
         if self.busy or self.append_future or self.delete_future:
@@ -259,12 +269,10 @@ class CapturePage(QWidget):
             self.status.setText('正在后台检查并删除超限模板…')
 
     def save_draft(self):
-        try:
-            self.controller.pending_input(self.domains.toPlainText())
+        if self.initializing or self.initialization_error:
             return True
-        except (OSError, ValueError) as exc:
-            self.status.setText('待采集列表保存失败，请检查本机数据目录：' + str(exc))
-            return False
+        self.draft_requested = self.domains.toPlainText()
+        return True
 
     def update_counts(self):
         pending = set()
@@ -334,7 +342,9 @@ class CapturePage(QWidget):
         visible = {r['id'] for r in self.visible_rows()}
         self.model.checked.intersection_update(visible)
         for index, row in enumerate(self.model.rows):
-            self.view.setRowHidden(index, row['id'] not in visible)
+            hidden = row['id'] not in visible
+            if self.view.isRowHidden(index) != hidden:
+                self.view.setRowHidden(index, hidden)
         self.update_bulk_actions()
 
     def update_bulk_actions(self, *_):
@@ -386,11 +396,13 @@ class CapturePage(QWidget):
             return
         try:
             keys = {row['id'] for row in rows}
-            self.controller.delete_tasks(keys)
             self.deleted_ids.update(keys)
             self.preview.close()
             if self.delete_future is None:
-                self.delete_future = self.detail_pool.submit(self.controller.cleanup_deleted)
+                def delete():
+                    self.controller.delete_tasks(keys)
+                    return self.controller.cleanup_deleted()
+                self.delete_future = self.detail_pool.submit(delete)
             self.remove_input_urls(urls_for(rows))
             self.refresh([r for r in self.model.rows if r['id'] not in self.deleted_ids])
             self.detail.clear()
@@ -433,7 +445,7 @@ class CapturePage(QWidget):
         selected = self.selected()
         for widget in (self.output, self.choose_button, self.depth, self.pages, self.sites, self.connections, self.mode):
             widget.setEnabled(not self.busy)
-        self.domains.setEnabled(True)
+        self.domains.setEnabled(not self.initializing and not self.initialization_error)
         self.start_button.setText('加入队列' if self.busy else '开始采集')
         self.start_button.setEnabled(self.append_future is None and self.delete_future is None and not (self.busy and self.cancel.is_set()))
         can_add = self.append_future is None and self.delete_future is None and not (self.busy and self.cancel.is_set())
@@ -442,11 +454,15 @@ class CapturePage(QWidget):
         self.resume_button.setEnabled(self.resume_selected_action.isEnabled() or self.resume_all_button.isEnabled())
         self.policy_button.setEnabled(not self.busy and self.append_future is None and self.delete_future is None)
         self.pause_button.setEnabled(self.busy and not self.cancel.is_set())
-        published = len(selected) == 1 and bool(selected[0].get('published')) and Path(selected[0]['output']).is_dir()
+        published = len(selected) == 1 and bool(selected[0].get('published'))
         self.folder_button.setEnabled(published)
         self.details_button.setEnabled(len(selected) == 1)
         self.preview_button.setEnabled(len(selected) == 1 and selected[0]['state'] not in ('等待', '采集中', '整理中'))
         self.clear_button.setEnabled(not self.busy and len(selected) == 1 and not selected[0].get('published') and selected[0]['state'] != '已清理')
+        if self.initializing or self.initialization_error:
+            for widget in (self.start_button, self.resume_button, self.resume_all_button,
+                           self.policy_button, self.choose_button, self.output):
+                widget.setEnabled(False)
 
     def clear_cache(self):
         selected = self.selected()
@@ -455,12 +471,12 @@ class CapturePage(QWidget):
         task = selected[0]
         answer = QMessageBox.question(self, '清理此任务缓存', task['seed'] + '\n清理后释放断点文件，保留任务记录；下次继续将重新下载。', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if answer == QMessageBox.StandardButton.Yes:
-            try:
+            def clear():
                 self.controller.clear_cache(task['id'])
-                self.refresh()
-                self.detail.setPlainText('已清理：' + task['seed'] + '\n任务记录保留，继续采集将重新下载。')
-            except Exception as exc:
-                QMessageBox.warning(self, '无法清理', str(exc))
+                return self.controller.snapshot()
+            self.delete_future = self.detail_pool.submit(clear)
+            self.status.setText('正在后台清理缓存…')
+            self.update_actions()
 
     def refresh(self, rows=None):
         selected = {r['id'] for r in self.selected()}
@@ -505,6 +521,8 @@ class CapturePage(QWidget):
         return Settings(depth=self.depth.currentIndex() + 1, pages=self.pages.value(), sites=self.sites.value(), connections=self.connections.value(), lightweight=self.mode.currentIndex() == 1, template_limit_mb=self.template_limit_mb)
 
     def start(self):
+        if self.initializing or self.initialization_error:
+            return
         try:
             settings = self.settings()
             text, output = self.domains.toPlainText(), self.output.text()
@@ -600,20 +618,41 @@ class CapturePage(QWidget):
             editor.setTextCursor(cursor)
 
     def flush(self):
+        if self.initializing:
+            if not self.initial_future.done():
+                return
+            self.initializing = False
+            try:
+                output, limit, rows, draft = self.initial_future.result()
+                self.output.setText(output)
+                self.template_limit_mb = limit
+                self.policy_button.setText(f'自动清理：超过 {limit} MB')
+                self.refresh(rows)
+                self.domains.setPlainText(draft)
+                self.remove_saved_inputs(rows)
+                self.status.setText('采集记录已恢复，可以开始任务。')
+            except Exception as exc:
+                self.initialization_error = True
+                self.status.setText('采集记录恢复失败，请重新打开模块：' + str(exc))
+            self.update_actions()
         self.flush_detail()
         if self.delete_future and self.delete_future.done():
             future, self.delete_future = self.delete_future, None
             try:
                 rows = future.result()
+                self.delete_refreshing = False
                 for row in rows:
                     if row['state'] == '删除失败':
                         self.deleted_ids.discard(row['id'])
-                self.refresh()
-                self.domains.setPlainText(self.controller.pending_input(self.domains.toPlainText()))
+                self.refresh(rows)
                 self.status.setText('模板清理完成。超限任务及关联文件已移除；删除失败的任务会保留原因。')
             except Exception as exc:
                 self.deleted_ids.clear()
-                self.refresh()
+                if not self.delete_refreshing:
+                    self.delete_refreshing = True
+                    self.delete_future = self.detail_pool.submit(self.controller.snapshot)
+                else:
+                    self.delete_refreshing = False
                 self.detail.setPlainText('删除目录失败：' + str(exc))
         if self.append_future and self.append_future.done():
             future, self.append_future = self.append_future, None
@@ -636,6 +675,8 @@ class CapturePage(QWidget):
         prepared = events.pop('__tasks__', None)
         if prepared:
             self.refresh(json.loads(prepared[1]))
+        structural = False
+        removed_urls = set()
         for key, (state, raw) in events.items():
             index = self.row_indexes.get(key)
             if index is not None:
@@ -647,22 +688,24 @@ class CapturePage(QWidget):
                 task_data = event.get('task', {})
                 if task_data.get('revision', row.get('revision', 0)) < row.get('revision', 0):
                     continue
+                before = (row['state'], row.get('ended_at'), row.get('deleted'))
                 row.update(task_data)
                 row.update(event.get('metrics', {}))
                 row.update(state=state, detail=event['detail'])
                 row.update(presentation(row))
+                structural |= before != (row['state'], row.get('ended_at'), row.get('deleted'))
                 self.model.dataChanged.emit(self.model.index(index, 1), self.model.index(index, 7))
                 if state == '已自动清理':
-                    self.remove_input_urls({row['seed'], *row.get('aliases', [])})
+                    removed_urls.update({row['seed'], *row.get('aliases', [])})
                 elif state in ('已完成', '部分完成'):
-                    self.remove_saved_inputs([row])
+                    removed_urls.update({row['seed'], *row.get('aliases', [])})
+        if removed_urls:
+            self.remove_input_urls(removed_urls)
         if events:
-            if any(r.get('deleted') for r in self.model.rows) or [r['id'] for r in ordered(self.model.rows)] != [r['id'] for r in self.model.rows]:
+            if structural:
                 self.refresh(self.model.rows)
-            else:
+            elif self.size_filter.isChecked():
                 self.apply_filter()
-                self.update_counts()
-                self.update_actions()
 
     def finished(self):
         self.flush()
@@ -691,6 +734,15 @@ class CapturePage(QWidget):
             self.detail.setPlainText(selected[0]['seed'] + '\n' + selected[0].get('detail', '') + '\n正在后台读取详细报告…')
 
     def flush_detail(self):
+        if self.draft_future and self.draft_future.done():
+            future, self.draft_future = self.draft_future, None
+            try:
+                future.result()
+            except Exception as exc:
+                self.status.setText('待采集列表保存失败：' + str(exc))
+        if self.draft_requested is not None and self.draft_future is None:
+            text, self.draft_requested = self.draft_requested, None
+            self.draft_future = self.detail_pool.submit(self.controller.save_input, text)
         if self.detail_future and self.detail_future.done():
             key, future = self.detail_future_key, self.detail_future
             self.detail_future = None
@@ -725,11 +777,20 @@ class CapturePage(QWidget):
             QMessageBox.information(self, '无法预览', str(exc))
 
     def closeEvent(self, event):
-        if self.busy or self.append_future or self.delete_future:
+        if self.initializing or self.busy or self.append_future or self.delete_future:
             self.status.setText('仍有采集或清理任务，请暂停采集并等待清理完成后关闭。')
             event.ignore()
         else:
-            if not self.save_draft():
+            if self.draft_future or self.draft_requested is not None:
+                self.status.setText('正在保存采集输入，请稍后关闭。')
+                event.ignore()
+                return
+            try:
+                # Final small atomic write only; never open SQLite on close.
+                if not self.initialization_error:
+                    self.controller.save_input(self.domains.toPlainText())
+            except (OSError, ValueError) as exc:
+                self.status.setText('待采集列表保存失败：' + str(exc))
                 event.ignore()
                 return
             self.draft_timer.stop()

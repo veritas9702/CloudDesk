@@ -32,7 +32,29 @@ with tempfile.TemporaryDirectory() as temp:
     with patch.object(QMessageBox,'question',return_value=QMessageBox.StandardButton.Yes): panel.execute()
     wait(); assert len(panel.model.rows)==2
     panel.copy_ns(); assert 'example.com|a.ns.cloudflare.com,b.ns.cloudflare.com' in app.clipboard().text()
+    host.client.zones['example.com']['status']='active'
     panel.refresh(); wait()
+    panel.copy_ns()
+    expected='example.net|a.ns.cloudflare.com,b.ns.cloudflare.com'
+    assert app.clipboard().text()==expected
+    with patch.object(host,'save_text') as saved:
+        panel.export_ns();assert saved.call_args.args[0]==expected
+    with patch.object(host.client,'get',wraps=host.client.get) as reads:
+        panel.refresh();wait()
+        assert [call.args[0] for call in reads.call_args_list]==['/zones/example.net']
+    active_index=next(i for i,r in enumerate(panel.model.rows) if r['name']=='example.com')
+    panel.results.selectRow(active_index)
+    with patch.object(host.client,'get',wraps=host.client.get) as reads:
+        panel.refresh('selected');wait()
+        assert [call.args[0] for call in reads.call_args_list]==['/zones/example.com']
+    with patch.object(host.client,'get',wraps=host.client.get) as reads:
+        panel.refresh('all');wait()
+        assert len(reads.call_args_list)==2
+    host.client.zones['example.net']['status']='active'
+    panel.refresh();wait()
+    panel.copy_ns();assert errors and '没有待激活' in errors.pop()
+    assert app.clipboard().text()==expected
+
     for size in [(1160,850),(1440,1000)]:
         shell.resize(*size); app.processEvents(); shell.grab().save(str(out/f'onboarding-{size[0]}.png'))
     panel.configure(); assert host.nav.currentRow()==2 and 'example.com' in host.scope.toPlainText()

@@ -92,6 +92,14 @@ class OnboardingTests(unittest.TestCase):
         row=self.add()[0]; self.client.zones['example.com']['status']='active'
         self.assertEqual(self.service.refresh([row])[0]['state'],'已激活')
         self.assertEqual(ns_export([{'name':'bad.com','id':'x','name_servers':['one']}]),'')
+    def test_ns_export_pending_only_with_legacy_state_fallback(self):
+        base=dict(id='z',name_servers=['b.ns.cloudflare.com','a.ns.cloudflare.com'])
+        rows=[dict(base,name=name,status=status,state=state) for name,status,state in (
+            ('pending.com','pending','需处理'),('active.com','active','待更换 NS / 生效'),
+            ('legacy.com',None,'待更换 NS / 生效'),('unknown.com',None,'读取中'),
+            ('moved.com','moved','待更换 NS / 生效：moved'),('stale.com','pending','已激活'))]
+        self.assertEqual(ns_export(rows),'pending.com|a.ns.cloudflare.com,b.ns.cloudflare.com\nlegacy.com|a.ns.cloudflare.com,b.ns.cloudflare.com')
+
     def test_creation_failure_not_exported(self):
         self.client.fail='/zones'
         rows=self.add(); self.assertEqual(rows[0]['state'],'失败'); self.assertEqual(ns_export(rows),'')

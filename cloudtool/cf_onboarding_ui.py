@@ -1,11 +1,11 @@
 """Manual-registrar onboarding UI; all network work runs through the host worker."""
 from copy import deepcopy
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QApplication, QDialog, QTableWidget, QTableWidgetItem, QMessageBox, QCheckBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QApplication, QDialog, QTableWidget, QTableWidgetItem, QMessageBox, QCheckBox, QMenu
 from .ui_components import label, line, combo, button, DomainEditor, table
 from .table_model import TableModel
 from .automation_model import WorkflowOptions, parse_sites
-from .cf_onboarding import CFOnboarding, ns_export
+from .cf_onboarding import CFOnboarding, ns_export, pending_activation
 
 
 class CFOnboardingPanel(QWidget):
@@ -27,7 +27,11 @@ class CFOnboardingPanel(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(button('① 预览添加', self.preview, True))
         self.execute_button = button('② 确认添加并扫描', self.execute, True); bar.addWidget(self.execute_button)
-        bar.addWidget(button('刷新接入状态', self.refresh)); bar.addStretch()
+        refresh_button = button('刷新接入状态', lambda: None)
+        refresh_menu = QMenu(refresh_button)
+        for title, scope in [('仅刷新待激活（默认）', 'pending'), ('刷新当前选中', 'selected'), ('刷新全部域名', 'all')]:
+            refresh_menu.addAction(title, lambda checked=False, scope=scope: self.refresh(scope))
+        refresh_button.setMenu(refresh_menu); bar.addWidget(refresh_button); bar.addStretch()
         layout.addLayout(bar)
         self.notice = label('添加后自动设置 SSL 灵活。需要 Zone Edit、DNS Edit、Zone Settings Edit；读取账户需要 Account Read。')
         self.notice.setWordWrap(True); layout.addWidget(self.notice)
@@ -36,7 +40,7 @@ class CFOnboardingPanel(QWidget):
         self.results.setColumnWidth(0,180); self.results.setColumnWidth(2,290)
         self.results.doubleClicked.connect(lambda _: self.host.show_json("域名接入详情", self.model.rows[self.results.currentIndex().row()]))
         bar = QHBoxLayout()
-        for title, callback in [('核对选中域名 DNS', self.review), ('重新扫描选中域名', self.rescan), ('复制全部 NS', self.copy_ns), ('导出 NS', self.export_ns), ('进入批量配置', self.configure)]:
+        for title, callback in [('核对选中域名 DNS', self.review), ('重新扫描选中域名', self.rescan), ('复制待激活 NS', self.copy_ns), ('导出待激活 NS', self.export_ns), ('进入批量配置', self.configure)]:
             bar.addWidget(button(title, callback))
         layout.addLayout(bar)
         text = label('扫描无法保证找全邮件、子域名等记录。请与原服务商逐项核对，补齐后再修改 NS；同时核对原 DNSSEC / DS 配置。NS 格式：域名|ns1,ns2', 'notice')
@@ -130,10 +134,22 @@ class CFOnboardingPanel(QWidget):
         if not row.get('id'): raise ValueError('该域名尚未添加成功，请重新预览添加')
         return row
 
-    def refresh(self):
+    def refresh(self, scope='pending'):
         try:
-            controller = self.controller(); rows = deepcopy(self.model.rows)
-            self.job(lambda emit: controller.refresh(rows), self.show_rows, '正在检查 Cloudflare 接入状态…')
+            controller = self.controller()
+            if scope == 'selected':
+                indexes = self.results.selectionModel().selectedRows()
+                rows = [deepcopy(self.model.rows[i.row()]) for i in indexes]
+            elif scope == 'pending':
+                rows = [deepcopy(r) for r in self.model.rows if pending_activation(r)]
+            elif scope == 'all':
+                rows = deepcopy(self.model.rows)
+            else:
+                raise ValueError('无效刷新范围')
+            rows = [r for r in rows if r.get('id')]
+            if not rows:
+                self.notice.setText('所选范围没有可刷新的域名。'); return
+            self.job(lambda emit: controller.refresh(rows), self.show_rows, f'正在刷新 {len(rows)} 个域名的接入状态…')
         except Exception as exc:
             self.host.error(str(exc))
 
@@ -180,13 +196,13 @@ class CFOnboardingPanel(QWidget):
 
     def copy_ns(self):
         text = ns_export(self.model.rows)
-        if not text: self.host.error('尚无可导出的 NS，请先添加域名'); return
+        if not text: self.host.error('没有待激活且 NS 完整的域名；可先刷新接入状态'); return
         QApplication.clipboard().setText(text)
-        self.notice.setText('已复制每个域名对应的 NS，可粘贴到注册商批量修改页面。修改前请先核对原解析。')
+        self.notice.setText(f'已复制 {len(text.splitlines())} 个待激活域名的 NS，已排除已激活域名（以当前列表状态为准）。修改前请核对原解析。')
 
     def export_ns(self):
         text = ns_export(self.model.rows)
-        if not text: self.host.error('尚无可导出的 NS'); return
+        if not text: self.host.error('没有待激活且 NS 完整的域名；可先刷新接入状态'); return
         self.host.save_text(text, 'Text (*.txt)', 'cloudflare-nameservers.txt')
 
     def configure(self):

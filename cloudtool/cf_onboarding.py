@@ -7,9 +7,18 @@ from .models import Action, Plan, ApiError, Cancelled, canonical
 CACHE = 'cf-onboarding-v1'
 
 
+def pending_activation(row):
+    status = row.get('status')
+    if row.get('state') == '已激活' or status == 'active':
+        return False
+    return status == 'pending' or (not status and str(row.get('state', '')).startswith('待更换 NS / 生效'))
+
+
 def ns_export(rows):
     lines = []
     for row in rows:
+        if not pending_activation(row):
+            continue
         ns = nameservers(row.get('name_servers', []))
         if row.get('id') and len(set(ns)) >= 2:
             lines.append(row['name'] + '|' + ','.join(ns))

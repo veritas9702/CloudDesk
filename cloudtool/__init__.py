@@ -1,2 +1,2 @@
 """CloudDesk: isolated provider tools."""
-__version__ = "0.16.24"
+__version__ = "0.16.27"
